@@ -1,0 +1,6 @@
+go/hero-run-mcp
+node_modules/
+.env
+.env.local
+*.log
+.DS_Store
