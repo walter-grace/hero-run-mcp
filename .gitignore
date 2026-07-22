@@ -1,4 +1,12 @@
+# build artifacts (users build from source)
 go/hero-run-mcp
+zig/hero-run-mcp
+zig/.zig-cache/
+zig/zig-out/
+rust/target/
+swift/hero-run-mcp
+swift/*.dSYM/
+
 node_modules/
 .env
 .env.local

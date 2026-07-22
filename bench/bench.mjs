@@ -1,4 +1,4 @@
-// Runtime benchmark for the Hero Run MCP server across Go / Bun / Node / Python.
+// Runtime benchmark for the Hero Run MCP server across Zig / Rust / Go / Swift / Bun / Node / Python.
 // Measures what language choice actually affects: cold-start (spawn -> first response)
 // and serial JSON-RPC dispatch throughput (tools/list, a no-network handler). End-to-end
 // tool latency is network-bound and near-identical across runtimes, so it is not the point.
@@ -12,6 +12,9 @@ const BUN = process.env.HOME + "/.bun/bin/bun";
 
 const SERVERS = [
   { name: "Go", cmd: R("go/hero-run-mcp"), args: [] },
+  { name: "Zig", cmd: R("zig/hero-run-mcp"), args: [] },
+  { name: "Rust", cmd: R("rust/target/release/hero-run-mcp"), args: [] },
+  { name: "Swift", cmd: R("swift/hero-run-mcp"), args: [] },
   { name: "Bun", cmd: BUN, args: [R("bun/index.ts")] },
   { name: "Node", cmd: "node", args: [R("node/index.mjs")] },
   { name: "Python", cmd: "python3", args: [R("python/server.py")] },
