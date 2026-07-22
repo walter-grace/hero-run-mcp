@@ -75,6 +75,10 @@ Run it yourself: `node bench/bench.mjs`
 
 The takeaway: for an MCP gateway, **pick the runtime that's easiest to distribute and maintain**. The performance gap is real only at cold start, and irrelevant to per-request latency.
 
+## Examples
+
+- **[examples/telegram-bot](examples/telegram-bot)** — a Go Telegram bot that drives the MCP server as a subprocess, turning each chat command (`/ask`, `/image`, `/models`, `/treasury`, `/balance`) into a real `tools/call`. A working reference for *consuming* the server.
+
 ## Notes
 
 - These are **key-mode** servers (prepaid credits). The production reference also supports **wallet mode** (`AGENT_PRIVATE_KEY`, pays per call on-chain via viem) — see the main app repo.

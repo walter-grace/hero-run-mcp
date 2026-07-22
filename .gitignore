@@ -1,5 +1,6 @@
 # build artifacts (users build from source)
 go/hero-run-mcp
+examples/telegram-bot/telegram-bot
 zig/hero-run-mcp
 zig/.zig-cache/
 zig/zig-out/
