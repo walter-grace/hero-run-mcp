@@ -49,6 +49,34 @@ MCP_CMD="../../rust/target/release/hero-run-mcp"     go run .   # Rust
 
 `HERO_RUN_KEY` (and `HERO_RUN_URL`) are inherited by the subprocess automatically.
 
+## Deploy your own (always-on)
+
+Run your own bot with your own BotFather token and your own $HERO key, so you pay for your own usage and nothing is shared. Two env vars, no ports (it long-polls Telegram).
+
+**Docker** (builds both binaries into one image, run from the repo root):
+
+```bash
+docker build -f examples/telegram-bot/Dockerfile -t hero-run-bot .
+docker run -d --restart=always \
+  -e TELEGRAM_BOT_TOKEN=123456:ABC... \
+  -e HERO_RUN_KEY=hr_live_... \
+  --name hero-run-bot hero-run-bot
+```
+
+**Fly.io** (free-tier eligible, always-on worker), from the repo root:
+
+```bash
+fly launch --no-deploy --copy-config --config examples/telegram-bot/fly.toml
+fly secrets set TELEGRAM_BOT_TOKEN=123456:ABC... HERO_RUN_KEY=hr_live_... -c examples/telegram-bot/fly.toml
+fly deploy -c examples/telegram-bot/fly.toml
+```
+
+**Railway / Render / any container host:** point it at this repo, set the Dockerfile path to `examples/telegram-bot/Dockerfile`, and add the two env vars.
+
+## Demo mode
+
+Set `DEMO_MODE=1` to run a **public** bot without draining its key: `/image` is disabled and `/ask` is capped per user and in total (defaults `DEMO_USER_LIMIT=3`, `DEMO_TOTAL_LIMIT=20`, in-memory). Free tools (`/models`, `/treasury`, `/balance`) stay open. Users are pointed to run their own bot for unlimited paid tools. Leave `DEMO_MODE` unset for your own private bot.
+
 ## Notes
 
 - The bot serializes requests over the single MCP stdio pipe (a mutex), so concurrent chat users are handled one call at a time. For higher throughput, run a pool of MCP subprocesses.

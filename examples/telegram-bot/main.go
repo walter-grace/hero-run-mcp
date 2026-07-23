@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -189,6 +190,45 @@ Add an optional model id first, e.g.
   /ask openai/gpt-5 explain quantum tunneling
   /image google/gemini-3-pro-image a red fox`
 
+const selfHost = "This is a public demo, so paid tools are limited to protect a shared balance. Run your own Hero Run bot with your own token and $HERO key (no limits): https://hero-run.vercel.app/keys"
+
+// demo mode caps paid usage on a public bot so its shared prepaid key can't be
+// drained. Counters are in-memory (reset on restart) — fine for a demo.
+type demo struct {
+	on         bool
+	userLimit  int
+	totalLimit int
+	mu         sync.Mutex
+	perUser    map[int64]int
+	total      int
+}
+
+// allowAsk reports whether this chat may run one more paid /ask under the demo caps.
+func (d *demo) allowAsk(chat int64) bool {
+	if !d.on {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.total >= d.totalLimit || d.perUser[chat] >= d.userLimit {
+		return false
+	}
+	d.total++
+	d.perUser[chat]++
+	return true
+}
+
+var dm = &demo{perUser: map[int64]int{}}
+
+func envInt(name string, def int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
 func main() {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
@@ -197,6 +237,12 @@ func main() {
 	cmdline := os.Getenv("MCP_CMD")
 	if cmdline == "" {
 		cmdline = "../../go/hero-run-mcp" // build with: (cd ../../go && go build -o hero-run-mcp .)
+	}
+	dm.on = os.Getenv("DEMO_MODE") == "1"
+	dm.userLimit = envInt("DEMO_USER_LIMIT", 3)
+	dm.totalLimit = envInt("DEMO_TOTAL_LIMIT", 20)
+	if dm.on {
+		log.Printf("DEMO_MODE on: /image disabled, /ask capped at %d/user, %d total (in-memory)", dm.userLimit, dm.totalLimit)
 	}
 	server, err := startMCP(cmdline)
 	if err != nil {
@@ -239,7 +285,11 @@ func handle(bot *tg, server *mcp, chat int64, text string) {
 
 	switch cmd {
 	case "/start", "/help":
-		bot.send(chat, help)
+		msg := help
+		if dm.on {
+			msg += "\n\n" + selfHost
+		}
+		bot.send(chat, msg)
 	case "/models":
 		kind := arg
 		if kind == "" {
@@ -250,6 +300,10 @@ func handle(bot *tg, server *mcp, chat int64, text string) {
 	case "/ask":
 		if arg == "" {
 			bot.send(chat, "Usage: /ask [model] <prompt>")
+			return
+		}
+		if !dm.allowAsk(chat) {
+			bot.send(chat, selfHost)
 			return
 		}
 		bot.send(chat, "Thinking…")
@@ -263,6 +317,10 @@ func handle(bot *tg, server *mcp, chat int64, text string) {
 	case "/image":
 		if arg == "" {
 			bot.send(chat, "Usage: /image [model] <prompt>")
+			return
+		}
+		if dm.on {
+			bot.send(chat, "Image generation is disabled on the public demo (it costs a lot of $HERO). "+selfHost)
 			return
 		}
 		bot.send(chat, "Generating…")

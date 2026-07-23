@@ -1,0 +1,21 @@
+# Deploy the Hero Run bot to Fly.io as an always-on worker.
+# From the REPO ROOT:
+#   fly launch --no-deploy --copy-config --config examples/telegram-bot/fly.toml
+#   fly secrets set TELEGRAM_BOT_TOKEN=... HERO_RUN_KEY=... -c examples/telegram-bot/fly.toml
+#   fly deploy -c examples/telegram-bot/fly.toml
+app = "hero-run-bot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "examples/telegram-bot/Dockerfile"
+
+[env]
+  MCP_CMD = "/app/hero-run-mcp"
+
+# One always-on machine. It long-polls Telegram — no inbound ports needed.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+[processes]
+  app = "/app/telegram-bot"
