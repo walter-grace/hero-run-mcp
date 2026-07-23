@@ -77,6 +77,8 @@ The takeaway: for an MCP gateway, **pick the runtime that's easiest to distribut
 
 ## Examples
 
+- **[examples/python-agent](examples/python-agent)** — a tool-using agent in ~40 lines of Python via the standard `openai` client pointed at Hero Run's OpenAI-compatible `/v1` (model `"auto"` = the router).
+- **[examples/go-agent](examples/go-agent)** — the same agent in Go with the standard library only, zero dependencies.
 - **[examples/telegram-bot](examples/telegram-bot)** — a Go Telegram bot that drives the MCP server as a subprocess, turning each chat command (`/ask`, `/image`, `/models`, `/treasury`, `/balance`) into a real `tools/call`. A working reference for *consuming* the server.
 
 ## Notes
