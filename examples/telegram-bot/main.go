@@ -179,12 +179,15 @@ func (t *tg) sendPhoto(chat int64, data []byte, caption string) error {
 const help = `Hero Run — run 340+ AI models, paid in $HERO.
 
 /models [text|image|audio]  list available models
-/ask <prompt>               run a text model
-/image <prompt>             generate an image (Nano Banana 2)
+/ask [model] <prompt>       run a text model
+/image [model] <prompt>     generate an image
 /treasury                   fees funding open-source AI
 /balance                    your $HERO credit balance
 
-Plain text is treated as /ask.`
+Plain text is treated as /ask.
+Add an optional model id first, e.g.
+  /ask openai/gpt-5 explain quantum tunneling
+  /image google/gemini-3-pro-image a red fox`
 
 func main() {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
@@ -246,19 +249,28 @@ func handle(bot *tg, server *mcp, chat int64, text string) {
 		reply(bot, chat, out, err)
 	case "/ask":
 		if arg == "" {
-			bot.send(chat, "Usage: /ask <prompt>")
+			bot.send(chat, "Usage: /ask [model] <prompt>")
 			return
 		}
 		bot.send(chat, "Thinking…")
-		out, err := server.callTool("run_text", map[string]any{"prompt": arg})
+		model, prompt := splitModel(arg)
+		args := map[string]any{"prompt": prompt}
+		if model != "" {
+			args["model"] = model
+		}
+		out, err := server.callTool("run_text", args)
 		reply(bot, chat, out, err)
 	case "/image":
 		if arg == "" {
-			bot.send(chat, "Usage: /image <prompt>")
+			bot.send(chat, "Usage: /image [model] <prompt>")
 			return
 		}
 		bot.send(chat, "Generating…")
-		out, err := server.callTool("generate_image", map[string]any{"prompt": arg})
+		model, prompt := splitModel(arg)
+		if model == "" {
+			model = "google/gemini-2.5-flash-image" // affordable default; override with /image <model> <prompt>
+		}
+		out, err := server.callTool("generate_image", map[string]any{"prompt": prompt, "model": model})
 		if err != nil {
 			bot.send(chat, "Error: "+err.Error())
 			return
@@ -280,6 +292,16 @@ func handle(bot *tg, server *mcp, chat int64, text string) {
 	default:
 		bot.send(chat, "Unknown command. Send /help for options.")
 	}
+}
+
+// splitModel pulls an optional leading model id (contains "/") off the argument,
+// e.g. "google/gemini-3-pro-image a red fox" -> ("google/gemini-3-pro-image", "a red fox").
+func splitModel(arg string) (model, prompt string) {
+	f := strings.Fields(arg)
+	if len(f) >= 2 && strings.Contains(f[0], "/") {
+		return f[0], strings.TrimSpace(arg[strings.Index(arg, f[0])+len(f[0]):])
+	}
+	return "", arg
 }
 
 func reply(bot *tg, chat int64, out contentItem, err error) {
