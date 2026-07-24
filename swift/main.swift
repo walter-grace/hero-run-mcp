@@ -50,10 +50,19 @@ func str(_ v: Any?) -> String? {
 
 // ---- HTTP (synchronous via semaphore) --------------------------------------
 
+// Long timeout: video generation can take 1-3 minutes (URLSession default is 60s).
+let httpSession: URLSession = {
+    let cfg = URLSessionConfiguration.default
+    cfg.timeoutIntervalForRequest = 300
+    cfg.timeoutIntervalForResource = 300
+    return URLSession(configuration: cfg)
+}()
+
 func http(_ path: String, method: String = "GET", body: [String: Any]? = nil, useKey: Bool = false) -> [String: Any] {
     guard let url = URL(string: baseURL + path) else { return ["error": "bad url"] }
     var req = URLRequest(url: url)
     req.httpMethod = method
+    req.timeoutInterval = 300
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
     if useKey && !KEY.isEmpty { req.setValue(KEY, forHTTPHeaderField: "x-api-key") }
     if let body = body {
@@ -61,7 +70,7 @@ func http(_ path: String, method: String = "GET", body: [String: Any]? = nil, us
     }
     let sem = DispatchSemaphore(value: 0)
     var out: [String: Any] = [:]
-    let task = URLSession.shared.dataTask(with: req) { data, resp, err in
+    let task = httpSession.dataTask(with: req) { data, resp, err in
         defer { sem.signal() }
         if let data = data,
            let obj = try? JSONSerialization.jsonObject(with: data),
@@ -82,11 +91,15 @@ func http(_ path: String, method: String = "GET", body: [String: Any]? = nil, us
 
 let toolsJSON = """
 [
-  { "name": "list_models", "description": "List AI models available through the Hero Run gateway.",
-    "inputSchema": { "type": "object", "properties": { "kind": { "type": "string", "enum": ["text", "image", "audio", "all"] } } } },
+  { "name": "list_models", "description": "List AI models available through the Hero Run gateway. Tip: append @gateway to a model id (e.g. openai/gpt-oss-120b@cerebras) to pin a specific gateway.",
+    "inputSchema": { "type": "object", "properties": { "kind": { "type": "string", "enum": ["text", "image", "video", "audio", "all"] } } } },
   { "name": "run_text", "description": "Run a text model (default: auto). Pays $HERO via your key.",
     "inputSchema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" }, "model": { "type": "string" }, "consent": { "type": "boolean" } } } },
   { "name": "generate_image", "description": "Generate an image. Pays $HERO via your key.",
+    "inputSchema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" }, "model": { "type": "string" }, "consent": { "type": "boolean" } } } },
+  { "name": "generate_video", "description": "Generate a short video clip (~5s, default Wan 2.2 480p). Takes 1-3 minutes. Pays $HERO via your key.",
+    "inputSchema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" }, "model": { "type": "string" }, "consent": { "type": "boolean" } } } },
+  { "name": "generate_audio", "description": "Generate speech or music (default: openai/gpt-audio-mini; music: google/lyria-3-clip-preview). Pays $HERO via your key.",
     "inputSchema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" }, "model": { "type": "string" }, "consent": { "type": "boolean" } } } },
   { "name": "treasury_stats", "description": "Read the Hero Run treasury (live from Base).",
     "inputSchema": { "type": "object", "properties": {} } },
@@ -137,6 +150,23 @@ func t_generate_image(_ a: [String: Any]) throws -> String {
     return "No image returned."
 }
 
+func t_generate_video(_ a: [String: Any]) throws -> String {
+    let d = try runModel(str(a["model"]) ?? "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast", str(a["prompt"]) ?? "", "video", (a["consent"] as? Bool) ?? false)
+    if let video = str(d["video"]) {
+        return "Video ready: \(video)\nspent \(fmt(d["charged"])) $HERO"
+    }
+    return "No video returned."
+}
+
+func t_generate_audio(_ a: [String: Any]) throws -> String {
+    let d = try runModel(str(a["model"]) ?? "openai/gpt-audio-mini", str(a["prompt"]) ?? "", "audio", (a["consent"] as? Bool) ?? false)
+    if let audio = str(d["audio"]) {
+        let clip = String(audio.prefix(80))
+        return "Audio: \(clip)…\n\(str(d["text"]) ?? "")\nspent \(fmt(d["charged"])) $HERO"
+    }
+    return "No audio returned."
+}
+
 func t_treasury_stats(_ a: [String: Any]) throws -> String {
     let t = http("/api/treasury")
     let cl = (t["claimable"] as? [String: Any]) ?? [:]
@@ -157,6 +187,8 @@ let IMPL: [String: ([String: Any]) throws -> String] = [
     "list_models": t_list_models,
     "run_text": t_run_text,
     "generate_image": t_generate_image,
+    "generate_video": t_generate_video,
+    "generate_audio": t_generate_audio,
     "treasury_stats": t_treasury_stats,
     "wallet_balance": t_wallet_balance,
 ]

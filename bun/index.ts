@@ -10,9 +10,11 @@ const j = async (path, opt) => (await fetch(URL + path, opt)).json();
 const fmt = (n) => Math.round(Number(n) || 0).toLocaleString("en-US");
 
 const TOOLS = [
-  { name: "list_models", description: "List AI models available through the Hero Run gateway.", inputSchema: { type: "object", properties: { kind: { type: "string", enum: ["text", "image", "audio", "all"] } } } },
+  { name: "list_models", description: "List AI models available through the Hero Run gateway. Tip: append @gateway to a model id (e.g. openai/gpt-oss-120b@cerebras) to pin a specific gateway.", inputSchema: { type: "object", properties: { kind: { type: "string", enum: ["text", "image", "video", "audio", "all"] } } } },
   { name: "run_text", description: "Run a text model (default: auto). Pays $HERO via your key.", inputSchema: { type: "object", required: ["prompt"], properties: { prompt: { type: "string" }, model: { type: "string" }, consent: { type: "boolean" } } } },
   { name: "generate_image", description: "Generate an image. Pays $HERO via your key.", inputSchema: { type: "object", required: ["prompt"], properties: { prompt: { type: "string" }, model: { type: "string" }, consent: { type: "boolean" } } } },
+  { name: "generate_video", description: "Generate a short video clip (~5s, default Wan 2.2 480p). Takes 1-3 minutes. Pays $HERO via your key.", inputSchema: { type: "object", required: ["prompt"], properties: { prompt: { type: "string" }, model: { type: "string" }, consent: { type: "boolean" } } } },
+  { name: "generate_audio", description: "Generate speech or music (default: openai/gpt-audio-mini; music: google/lyria-3-clip-preview). Pays $HERO via your key.", inputSchema: { type: "object", required: ["prompt"], properties: { prompt: { type: "string" }, model: { type: "string" }, consent: { type: "boolean" } } } },
   { name: "treasury_stats", description: "Read the Hero Run treasury (live from Base).", inputSchema: { type: "object", properties: {} } },
   { name: "wallet_balance", description: "Your prepaid API key credit balance.", inputSchema: { type: "object", properties: {} } },
 ];
@@ -36,6 +38,14 @@ const IMPL = {
   async generate_image({ prompt, model, consent }) {
     const d = await runModel(model || "google/gemini-2.5-flash-image", prompt, "image", consent);
     return d.image ? `Image: ${d.image.slice(0, 80)}…\nspent ${fmt(d.charged)} $HERO` : "No image returned.";
+  },
+  async generate_video({ prompt, model, consent }) {
+    const d = await runModel(model || "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast", prompt, "video", consent);
+    return d.video ? `Video ready: ${d.video}\nspent ${fmt(d.charged)} $HERO` : "No video returned.";
+  },
+  async generate_audio({ prompt, model, consent }) {
+    const d = await runModel(model || "openai/gpt-audio-mini", prompt, "audio", consent);
+    return d.audio ? `Audio: ${d.audio.slice(0, 80)}…\n${d.text || ""}\nspent ${fmt(d.charged)} $HERO` : "No audio returned.";
   },
   async treasury_stats() {
     const t = await j("/api/treasury");

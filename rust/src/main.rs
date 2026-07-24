@@ -50,7 +50,10 @@ fn plain(v: &Value, fallback: &str) -> String {
 fn http(path: &str, method: &str, body: Option<Value>, use_key: bool) -> Value {
     let url = format!("{}{}", base_url(), path);
     let k = key();
-    let mut req = ureq::request(method, &url).set("Content-Type", "application/json");
+    // Video runs can take 1-3 minutes; allow up to 5 minutes for any call.
+    let mut req = ureq::request(method, &url)
+        .timeout(std::time::Duration::from_secs(300))
+        .set("Content-Type", "application/json");
     if use_key && !k.is_empty() {
         req = req.set("x-api-key", &k);
     }
@@ -70,15 +73,9 @@ fn http(path: &str, method: &str, body: Option<Value>, use_key: bool) -> Value {
     }
 }
 
-fn tools() -> Value {
-    json!([
-        { "name": "list_models", "description": "List AI models available through the Hero Run gateway.", "inputSchema": { "type": "object", "properties": { "kind": { "type": "string", "enum": ["text", "image", "audio", "all"] } } } },
-        { "name": "run_text", "description": "Run a text model (default: auto). Pays $HERO via your key.", "inputSchema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" }, "model": { "type": "string" }, "consent": { "type": "boolean" } } } },
-        { "name": "generate_image", "description": "Generate an image. Pays $HERO via your key.", "inputSchema": { "type": "object", "required": ["prompt"], "properties": { "prompt": { "type": "string" }, "model": { "type": "string" }, "consent": { "type": "boolean" } } } },
-        { "name": "treasury_stats", "description": "Read the Hero Run treasury (live from Base).", "inputSchema": { "type": "object", "properties": {} } },
-        { "name": "wallet_balance", "description": "Your prepaid API key credit balance.", "inputSchema": { "type": "object", "properties": {} } }
-    ])
-}
+// Static tools list as raw JSON so key order matches the Node reference exactly
+// (serde_json's default Map is a BTreeMap, which would sort keys alphabetically).
+const TOOLS_JSON: &str = r#"[{"name":"list_models","description":"List AI models available through the Hero Run gateway. Tip: append @gateway to a model id (e.g. openai/gpt-oss-120b@cerebras) to pin a specific gateway.","inputSchema":{"type":"object","properties":{"kind":{"type":"string","enum":["text","image","video","audio","all"]}}}},{"name":"run_text","description":"Run a text model (default: auto). Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},{"name":"generate_image","description":"Generate an image. Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},{"name":"generate_video","description":"Generate a short video clip (~5s, default Wan 2.2 480p). Takes 1-3 minutes. Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},{"name":"generate_audio","description":"Generate speech or music (default: openai/gpt-audio-mini; music: google/lyria-3-clip-preview). Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},{"name":"treasury_stats","description":"Read the Hero Run treasury (live from Base).","inputSchema":{"type":"object","properties":{}}},{"name":"wallet_balance","description":"Your prepaid API key credit balance.","inputSchema":{"type":"object","properties":{}}}]"#;
 
 fn run_model(mid: &str, input: &str, kind: &str, consent: bool) -> Result<Value, String> {
     if key().is_empty() {
@@ -174,6 +171,45 @@ fn call_tool(name: &str, a: &Value) -> Result<String, String> {
                 _ => Ok("No image returned.".to_string()),
             }
         }
+        "generate_video" => {
+            let consent = a.get("consent").and_then(|v| v.as_bool()).unwrap_or(false);
+            let d = run_model(
+                &model_or(a, "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast"),
+                str_arg(a, "prompt"),
+                "video",
+                consent,
+            )?;
+            match d.get("video").and_then(|v| v.as_str()) {
+                Some(video) if !video.is_empty() => Ok(format!(
+                    "Video ready: {}\nspent {} $HERO",
+                    video,
+                    fmt(d.get("charged").unwrap_or(&Value::Null))
+                )),
+                _ => Ok("No video returned.".to_string()),
+            }
+        }
+        "generate_audio" => {
+            let consent = a.get("consent").and_then(|v| v.as_bool()).unwrap_or(false);
+            let d = run_model(
+                &model_or(a, "openai/gpt-audio-mini"),
+                str_arg(a, "prompt"),
+                "audio",
+                consent,
+            )?;
+            match d.get("audio").and_then(|v| v.as_str()) {
+                Some(audio) if !audio.is_empty() => {
+                    let short: String = audio.chars().take(80).collect();
+                    let text = d.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    Ok(format!(
+                        "Audio: {}…\n{}\nspent {} $HERO",
+                        short,
+                        text,
+                        fmt(d.get("charged").unwrap_or(&Value::Null))
+                    ))
+                }
+                _ => Ok("No audio returned.".to_string()),
+            }
+        }
         "treasury_stats" => {
             let t = http("/api/treasury", "GET", None, false);
             let cl = t.get("claimable").cloned().unwrap_or(Value::Null);
@@ -204,12 +240,16 @@ fn call_tool(name: &str, a: &Value) -> Result<String, String> {
     }
 }
 
-fn send(o: &Value) {
+fn send_raw(s: &str) {
     let stdout = std::io::stdout();
     let mut h = stdout.lock();
-    let _ = h.write_all(o.to_string().as_bytes());
+    let _ = h.write_all(s.as_bytes());
     let _ = h.write_all(b"\n");
     let _ = h.flush();
+}
+
+fn send(o: &Value) {
+    send_raw(&o.to_string());
 }
 
 fn main() {
@@ -240,11 +280,10 @@ fn main() {
                     "serverInfo": { "name": "hero-run", "version": "1.0.0" }
                 }
             })),
-            "tools/list" => send(&json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": { "tools": tools() }
-            })),
+            "tools/list" => send_raw(&format!(
+                r#"{{"jsonrpc":"2.0","id":{},"result":{{"tools":{}}}}}"#,
+                id, TOOLS_JSON
+            )),
             "tools/call" => {
                 let name = params
                     .get("name")

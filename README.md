@@ -10,11 +10,15 @@ Learn more at [hero-run.vercel.app](https://hero-run.vercel.app).
 
 | Tool | What it does |
 |---|---|
-| `list_models` | List available models and their $HERO price (filter by `kind`) |
+| `list_models` | List available models and their $HERO price (filter by `kind`: text, image, video, audio) |
 | `run_text` | Run a text model (default `auto`, the best-value router) |
 | `generate_image` | Generate an image |
+| `generate_video` | Generate a ~5s video clip (default Wan 2.2 480p; takes 1–3 minutes) |
+| `generate_audio` | Generate speech (GPT Audio) or music (Lyria) |
 | `treasury_stats` | Read the treasury funding open-source AI (live from Base) |
 | `wallet_balance` | Your prepaid API-key credit balance |
+
+Tip: append `@gateway` to any model id (e.g. `openai/gpt-oss-120b@cerebras`) to pin a specific gateway — no failover, billed at that gateway's own price.
 
 ## Run it
 

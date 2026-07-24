@@ -33,11 +33,15 @@ def fmt(n):
 
 
 TOOLS = [
-    {"name": "list_models", "description": "List AI models available through the Hero Run gateway.",
-     "inputSchema": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["text", "image", "audio", "all"]}}}},
+    {"name": "list_models", "description": "List AI models available through the Hero Run gateway. Tip: append @gateway to a model id (e.g. openai/gpt-oss-120b@cerebras) to pin a specific gateway.",
+     "inputSchema": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["text", "image", "video", "audio", "all"]}}}},
     {"name": "run_text", "description": "Run a text model (default: auto). Pays $HERO via your key.",
      "inputSchema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "model": {"type": "string"}, "consent": {"type": "boolean"}}}},
     {"name": "generate_image", "description": "Generate an image. Pays $HERO via your key.",
+     "inputSchema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "model": {"type": "string"}, "consent": {"type": "boolean"}}}},
+    {"name": "generate_video", "description": "Generate a short video clip (~5s, default Wan 2.2 480p). Takes 1-3 minutes. Pays $HERO via your key.",
+     "inputSchema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "model": {"type": "string"}, "consent": {"type": "boolean"}}}},
+    {"name": "generate_audio", "description": "Generate speech or music (default: openai/gpt-audio-mini; music: google/lyria-3-clip-preview). Pays $HERO via your key.",
      "inputSchema": {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}, "model": {"type": "string"}, "consent": {"type": "boolean"}}}},
     {"name": "treasury_stats", "description": "Read the Hero Run treasury (live from Base).",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -72,6 +76,16 @@ def t_generate_image(a):
     return f"Image: {d['image'][:80]}…\nspent {fmt(d.get('charged'))} $HERO" if d.get("image") else "No image returned."
 
 
+def t_generate_video(a):
+    d = run_model(a.get("model") or "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast", a.get("prompt", ""), "video", a.get("consent"))
+    return f"Video ready: {d['video']}\nspent {fmt(d.get('charged'))} $HERO" if d.get("video") else "No video returned."
+
+
+def t_generate_audio(a):
+    d = run_model(a.get("model") or "openai/gpt-audio-mini", a.get("prompt", ""), "audio", a.get("consent"))
+    return f"Audio: {d['audio'][:80]}…\n{d.get('text') or ''}\nspent {fmt(d.get('charged'))} $HERO" if d.get("audio") else "No audio returned."
+
+
 def t_treasury_stats(a):
     t = http("/api/treasury")
     cl = t.get("claimable") or {}
@@ -87,7 +101,7 @@ def t_wallet_balance(a):
     return f"Prepaid API key\n{fmt(d['balance'])} $HERO credits (deposited {fmt(d['deposited'])}, spent {fmt(d['spent'])})"
 
 
-IMPL = {"list_models": t_list_models, "run_text": t_run_text, "generate_image": t_generate_image, "treasury_stats": t_treasury_stats, "wallet_balance": t_wallet_balance}
+IMPL = {"list_models": t_list_models, "run_text": t_run_text, "generate_image": t_generate_image, "generate_video": t_generate_video, "generate_audio": t_generate_audio, "treasury_stats": t_treasury_stats, "wallet_balance": t_wallet_balance}
 
 
 def send(o):

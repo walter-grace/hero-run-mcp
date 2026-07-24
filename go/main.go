@@ -157,6 +157,37 @@ func callTool(name string, a map[string]any) (string, error) {
 			img = img[:80]
 		}
 		return fmt.Sprintf("Image: %s…\nspent %s $HERO", img, fmtNum(num(d["charged"]))), nil
+	case "generate_video":
+		model := str(a["model"])
+		if model == "" {
+			model = "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast"
+		}
+		d, err := runModel(model, str(a["prompt"]), "video", a["consent"] == true)
+		if err != nil {
+			return "", err
+		}
+		video := str(d["video"])
+		if video == "" {
+			return "No video returned.", nil
+		}
+		return fmt.Sprintf("Video ready: %s\nspent %s $HERO", video, fmtNum(num(d["charged"]))), nil
+	case "generate_audio":
+		model := str(a["model"])
+		if model == "" {
+			model = "openai/gpt-audio-mini"
+		}
+		d, err := runModel(model, str(a["prompt"]), "audio", a["consent"] == true)
+		if err != nil {
+			return "", err
+		}
+		audio := str(d["audio"])
+		if audio == "" {
+			return "No audio returned.", nil
+		}
+		if len(audio) > 80 {
+			audio = audio[:80]
+		}
+		return fmt.Sprintf("Audio: %s…\n%s\nspent %s $HERO", audio, str(d["text"]), fmtNum(num(d["charged"]))), nil
 	case "treasury_stats":
 		d, err := httpJSON("/api/treasury", "GET", nil, false)
 		if err != nil {
@@ -185,9 +216,11 @@ func callTool(name string, a map[string]any) (string, error) {
 }
 
 var toolsJSON = json.RawMessage(`[
-{"name":"list_models","description":"List AI models available through the Hero Run gateway.","inputSchema":{"type":"object","properties":{"kind":{"type":"string","enum":["text","image","audio","all"]}}}},
+{"name":"list_models","description":"List AI models available through the Hero Run gateway. Tip: append @gateway to a model id (e.g. openai/gpt-oss-120b@cerebras) to pin a specific gateway.","inputSchema":{"type":"object","properties":{"kind":{"type":"string","enum":["text","image","video","audio","all"]}}}},
 {"name":"run_text","description":"Run a text model (default: auto). Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},
 {"name":"generate_image","description":"Generate an image. Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},
+{"name":"generate_video","description":"Generate a short video clip (~5s, default Wan 2.2 480p). Takes 1-3 minutes. Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},
+{"name":"generate_audio","description":"Generate speech or music (default: openai/gpt-audio-mini; music: google/lyria-3-clip-preview). Pays $HERO via your key.","inputSchema":{"type":"object","required":["prompt"],"properties":{"prompt":{"type":"string"},"model":{"type":"string"},"consent":{"type":"boolean"}}}},
 {"name":"treasury_stats","description":"Read the Hero Run treasury (live from Base).","inputSchema":{"type":"object","properties":{}}},
 {"name":"wallet_balance","description":"Your prepaid API key credit balance.","inputSchema":{"type":"object","properties":{}}}
 ]`)

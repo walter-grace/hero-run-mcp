@@ -9,9 +9,11 @@ var KEY: []const u8 = "";
 var gio: std.Io = undefined;
 
 const TOOLS_JSON =
-    "[{\"name\":\"list_models\",\"description\":\"List AI models available through the Hero Run gateway.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"text\",\"image\",\"audio\",\"all\"]}}}}," ++
+    "[{\"name\":\"list_models\",\"description\":\"List AI models available through the Hero Run gateway. Tip: append @gateway to a model id (e.g. openai/gpt-oss-120b@cerebras) to pin a specific gateway.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"text\",\"image\",\"video\",\"audio\",\"all\"]}}}}," ++
     "{\"name\":\"run_text\",\"description\":\"Run a text model (default: auto). Pays $HERO via your key.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"prompt\"],\"properties\":{\"prompt\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"consent\":{\"type\":\"boolean\"}}}}," ++
     "{\"name\":\"generate_image\",\"description\":\"Generate an image. Pays $HERO via your key.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"prompt\"],\"properties\":{\"prompt\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"consent\":{\"type\":\"boolean\"}}}}," ++
+    "{\"name\":\"generate_video\",\"description\":\"Generate a short video clip (~5s, default Wan 2.2 480p). Takes 1-3 minutes. Pays $HERO via your key.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"prompt\"],\"properties\":{\"prompt\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"consent\":{\"type\":\"boolean\"}}}}," ++
+    "{\"name\":\"generate_audio\",\"description\":\"Generate speech or music (default: openai/gpt-audio-mini; music: google/lyria-3-clip-preview). Pays $HERO via your key.\",\"inputSchema\":{\"type\":\"object\",\"required\":[\"prompt\"],\"properties\":{\"prompt\":{\"type\":\"string\"},\"model\":{\"type\":\"string\"},\"consent\":{\"type\":\"boolean\"}}}}," ++
     "{\"name\":\"treasury_stats\",\"description\":\"Read the Hero Run treasury (live from Base).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
     "{\"name\":\"wallet_balance\",\"description\":\"Your prepaid API key credit balance.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]";
 
@@ -259,18 +261,26 @@ fn argBool(args: Value, key: []const u8) bool {
     return v == .bool and v.bool;
 }
 
-// Runs run_text / generate_image; writes success text to out or on tool failure
-// sets msg. Returns text, or error.ToolFail with *msg populated.
-fn toolRun(arena: std.mem.Allocator, args: Value, is_image: bool, msg: *[]const u8) ToolError![]u8 {
+const RunKind = enum { text, image, video, audio };
+
+// Runs run_text / generate_image / generate_video / generate_audio; writes
+// success text to out or on tool failure sets msg. Returns text, or
+// error.ToolFail with *msg populated.
+fn toolRun(arena: std.mem.Allocator, args: Value, run_kind: RunKind, msg: *[]const u8) ToolError![]u8 {
     if (KEY.len == 0) {
         msg.* = "Set HERO_RUN_KEY (mint at /keys) to run models.";
         return error.ToolFail;
     }
-    const default_model: []const u8 = if (is_image) "google/gemini-2.5-flash-image" else "auto";
+    const default_model: []const u8 = switch (run_kind) {
+        .text => "auto",
+        .image => "google/gemini-2.5-flash-image",
+        .video => "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast",
+        .audio => "openai/gpt-audio-mini",
+    };
     const model = argStr(args, "model", default_model);
     const prompt = argStr(args, "prompt", "");
     const consent = argBool(args, "consent");
-    const kind: []const u8 = if (is_image) "image" else "text";
+    const kind: []const u8 = @tagName(run_kind);
 
     const parsed = runModel(arena, model, prompt, kind, consent) catch |e| return e;
     const d = parsed.value;
@@ -280,7 +290,7 @@ fn toolRun(arena: std.mem.Allocator, args: Value, is_image: bool, msg: *[]const 
     }
 
     var out: List = .empty;
-    if (is_image) {
+    if (run_kind == .image) {
         const img_v = objGet(d, "image");
         if (img_v != null and img_v.? == .string and img_v.?.string.len > 0) {
             const img = img_v.?.string;
@@ -292,6 +302,34 @@ fn toolRun(arena: std.mem.Allocator, args: Value, is_image: bool, msg: *[]const 
             try out.appendSlice(arena, " $HERO");
         } else {
             try out.appendSlice(arena, "No image returned.");
+        }
+    } else if (run_kind == .video) {
+        const vid_v = objGet(d, "video");
+        if (vid_v != null and vid_v.? == .string and vid_v.?.string.len > 0) {
+            try out.appendSlice(arena, "Video ready: ");
+            try out.appendSlice(arena, vid_v.?.string);
+            try out.appendSlice(arena, "\nspent ");
+            try appendCommas(&out, arena, valF64(objGet(d, "charged")));
+            try out.appendSlice(arena, " $HERO");
+        } else {
+            try out.appendSlice(arena, "No video returned.");
+        }
+    } else if (run_kind == .audio) {
+        const aud_v = objGet(d, "audio");
+        if (aud_v != null and aud_v.? == .string and aud_v.?.string.len > 0) {
+            const aud = aud_v.?.string;
+            // base64 data URI → an 80-byte prefix is ASCII-safe
+            const slice = aud[0..@min(aud.len, 80)];
+            try out.appendSlice(arena, "Audio: ");
+            try out.appendSlice(arena, slice);
+            try out.appendSlice(arena, "\xe2\x80\xa6\n"); // …
+            const text = valStr(objGet(d, "text"));
+            try out.appendSlice(arena, if (std.mem.eql(u8, text, "?")) "" else text);
+            try out.appendSlice(arena, "\nspent ");
+            try appendCommas(&out, arena, valF64(objGet(d, "charged")));
+            try out.appendSlice(arena, " $HERO");
+        } else {
+            try out.appendSlice(arena, "No audio returned.");
         }
     } else {
         const text = valStr(objGet(d, "text"));
@@ -442,13 +480,25 @@ fn handleLine(gpa: std.mem.Allocator, line: []const u8) void {
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "run_text")) {
-            text = toolRun(arena, args, false, &msg) catch |e| blk: {
+            text = toolRun(arena, args, .text, &msg) catch |e| blk: {
                 is_err = true;
                 if (e == error.ToolFail) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "generate_image")) {
-            text = toolRun(arena, args, true, &msg) catch |e| blk: {
+            text = toolRun(arena, args, .image, &msg) catch |e| blk: {
+                is_err = true;
+                if (e == error.ToolFail) {} else msg = errMsg(e);
+                break :blk "";
+            };
+        } else if (std.mem.eql(u8, name, "generate_video")) {
+            text = toolRun(arena, args, .video, &msg) catch |e| blk: {
+                is_err = true;
+                if (e == error.ToolFail) {} else msg = errMsg(e);
+                break :blk "";
+            };
+        } else if (std.mem.eql(u8, name, "generate_audio")) {
+            text = toolRun(arena, args, .audio, &msg) catch |e| blk: {
                 is_err = true;
                 if (e == error.ToolFail) {} else msg = errMsg(e);
                 break :blk "";
