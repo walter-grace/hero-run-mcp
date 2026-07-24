@@ -6,6 +6,7 @@ zig/.zig-cache/
 zig/zig-out/
 rust/target/
 swift/hero-run-mcp
+cpp/hero-run-mcp
 swift/*.dSYM/
 
 node_modules/

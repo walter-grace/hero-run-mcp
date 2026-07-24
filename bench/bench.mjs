@@ -15,6 +15,7 @@ const SERVERS = [
   { name: "Zig", cmd: R("zig/hero-run-mcp"), args: [] },
   { name: "Rust", cmd: R("rust/target/release/hero-run-mcp"), args: [] },
   { name: "Swift", cmd: R("swift/hero-run-mcp"), args: [] },
+  { name: "C++", cmd: R("cpp/hero-run-mcp"), args: [] },
   { name: "Bun", cmd: BUN, args: [R("bun/index.ts")] },
   { name: "Node", cmd: "node", args: [R("node/index.mjs")] },
   { name: "Python", cmd: "python3", args: [R("python/server.py")] },
