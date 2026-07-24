@@ -1,6 +1,6 @@
 # Hero Run MCP server
 
-One MCP tool surface for running **340+ AI models**, paid in **$HERO** per call. Any MCP-speaking agent (Claude Code, etc.) can list models, run text/image, and read the on-chain treasury. Usage funds open-source AI model training.
+One MCP tool surface for running **375+ AI models** (text, image, video, audio), paid in **$HERO** per call. Any MCP-speaking agent (Claude Code, etc.) can list models, run text/image, and read the on-chain treasury. Usage funds open-source AI model training.
 
 Implemented **seven ways** — Zig, Rust, Go, Swift, Bun, Node, Python — so you can pick your runtime, and benchmarked so the choice is informed. Every one is a full server (all tools live). The four scripting/compiled-with-stdlib ports are **dependency-free**; Rust uses two small crates.
 
