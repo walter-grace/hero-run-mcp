@@ -87,6 +87,8 @@ The takeaway: for an MCP gateway, **pick the runtime that's easiest to distribut
 - **[examples/go-agent](examples/go-agent)** — the same agent in Go with the standard library only, zero dependencies.
 - **[examples/telegram-bot](examples/telegram-bot)** — a Go Telegram bot that drives the MCP server as a subprocess, turning each chat command (`/ask`, `/image`, `/models`, `/treasury`, `/balance`) into a real `tools/call`. A working reference for *consuming* the server.
 
+- **[hero-run-market-maker](https://github.com/walter-grace/hero-run-market-maker)** — a Go market-making bot for $HERO whose optional `-brain` flag consults Hero Run itself for regime calls (routing modes as model ids, @gateway pinning, strict-JSON `response_format`) — the flywheel as a working example.
+
 ## Notes
 
 - These are **key-mode** servers (prepaid credits). The production reference also supports **wallet mode** (`AGENT_PRIVATE_KEY`, pays per call on-chain via viem) — see the main app repo.
