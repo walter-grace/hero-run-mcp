@@ -7,12 +7,36 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
+
+// rpcError carries a JSON-RPC error code alongside the message.
+type rpcError struct {
+	code int
+	msg  string
+}
+
+func (e *rpcError) Error() string { return e.msg }
+
+func invalidParams(format string, args ...any) error {
+	return &rpcError{code: -32602, msg: fmt.Sprintf(format, args...)}
+}
+
+// codeOf returns the JSON-RPC code an error should be reported with.
+func codeOf(err error) int {
+	var re *rpcError
+	if errors.As(err, &re) {
+		return re.code
+	}
+	return -32000
+}
 
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
@@ -24,24 +48,34 @@ func env(k, d string) string {
 var baseURL = env("HERO_RUN_URL", "https://hero-run.vercel.app")
 var apiKey = os.Getenv("HERO_RUN_KEY")
 
+// Video runs can take 1-3 minutes; allow up to 5 minutes for any call.
+var client = &http.Client{Timeout: 300 * time.Second}
+
 func httpJSON(path, method string, body any, useKey bool) (map[string]any, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
 		rdr = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, baseURL+path, rdr)
+	req, err := http.NewRequest(method, baseURL+path, rdr)
+	if err != nil {
+		return nil, fmt.Errorf("bad url")
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if useKey && apiKey != "" {
 		req.Header.Set("x-api-key", apiKey)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	var out map[string]any
-	json.NewDecoder(resp.Body).Decode(&out)
+	// A non-JSON body (HTML error page, empty response) is a failure, not an
+	// empty success — never let it read as "0 credits" / "0 models".
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("HTTP %d: invalid JSON response from %s", resp.StatusCode, path)
+	}
 	return out, nil
 }
 
@@ -56,6 +90,74 @@ func str(v any) string {
 		return s
 	}
 	return ""
+}
+
+// loose renders any JSON value as plain text (string without quotes, number
+// as-is), so numeric fields don't disappear.
+func loose(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool:
+		return strconv.FormatBool(t)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case json.Number:
+		return t.String()
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Sprintf("%v", t)
+		}
+		return string(b)
+	}
+}
+
+// plain is loose with a fallback for a missing/null value.
+func plain(v any, fallback string) string {
+	if v == nil {
+		return fallback
+	}
+	return loose(v)
+}
+
+// apiError reports the message of a truthy `error` field, if any. An error
+// object (not just a string) counts as a failure.
+func apiError(d map[string]any) (string, bool) {
+	v, ok := d["error"]
+	if !ok || v == nil {
+		return "", false
+	}
+	switch t := v.(type) {
+	case string:
+		if t == "" {
+			return "", false
+		}
+	case bool:
+		if !t {
+			return "", false
+		}
+	case float64:
+		if t == 0 {
+			return "", false
+		}
+	}
+	return loose(v), true
+}
+
+// promptArg requires a string `prompt` before any (billed) HTTP call.
+func promptArg(a map[string]any) (string, error) {
+	v, ok := a["prompt"]
+	if !ok || v == nil {
+		return "", invalidParams("Invalid params: prompt must be a string")
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", invalidParams("Invalid params: prompt must be a string")
+	}
+	return s, nil
 }
 
 // comma-format an integer amount
@@ -95,7 +197,7 @@ func runModel(id, input, kind string, consent bool) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if e, ok := d["error"].(string); ok {
+	if e, ok := apiError(d); ok {
 		return nil, fmt.Errorf("%s", e)
 	}
 	return d, nil
@@ -108,9 +210,14 @@ func callTool(name string, a map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		kind := str(a["kind"])
-		if kind == "" {
-			kind = "all"
+		if e, ok := apiError(d); ok {
+			return "", fmt.Errorf("%s", e)
+		}
+		// An explicit string (including "") is a supplied filter; a missing or
+		// null kind means no filter.
+		kind := "all"
+		if s, ok := a["kind"].(string); ok {
+			kind = s
 		}
 		models, _ := d["models"].([]any)
 		var lines []string
@@ -127,11 +234,15 @@ func callTool(name string, a map[string]any) (string, error) {
 		}
 		return fmt.Sprintf("%d models. Each costs $HERO per run.\n%s", count, strings.Join(lines, "\n")), nil
 	case "run_text":
+		prompt, err := promptArg(a)
+		if err != nil {
+			return "", err
+		}
 		model := str(a["model"])
 		if model == "" {
 			model = "auto"
 		}
-		d, err := runModel(model, str(a["prompt"]), "text", a["consent"] == true)
+		d, err := runModel(model, prompt, "text", a["consent"] == true)
 		if err != nil {
 			return "", err
 		}
@@ -141,11 +252,15 @@ func callTool(name string, a map[string]any) (string, error) {
 		}
 		return fmt.Sprintf("%s\n\n— %s · spent %s $HERO", str(d["text"]), am, fmtNum(num(d["charged"]))), nil
 	case "generate_image":
+		prompt, err := promptArg(a)
+		if err != nil {
+			return "", err
+		}
 		model := str(a["model"])
 		if model == "" {
 			model = "google/gemini-2.5-flash-image"
 		}
-		d, err := runModel(model, str(a["prompt"]), "image", a["consent"] == true)
+		d, err := runModel(model, prompt, "image", a["consent"] == true)
 		if err != nil {
 			return "", err
 		}
@@ -158,11 +273,15 @@ func callTool(name string, a map[string]any) (string, error) {
 		}
 		return fmt.Sprintf("Image: %s…\nspent %s $HERO", img, fmtNum(num(d["charged"]))), nil
 	case "generate_video":
+		prompt, err := promptArg(a)
+		if err != nil {
+			return "", err
+		}
 		model := str(a["model"])
 		if model == "" {
 			model = "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast"
 		}
-		d, err := runModel(model, str(a["prompt"]), "video", a["consent"] == true)
+		d, err := runModel(model, prompt, "video", a["consent"] == true)
 		if err != nil {
 			return "", err
 		}
@@ -172,11 +291,15 @@ func callTool(name string, a map[string]any) (string, error) {
 		}
 		return fmt.Sprintf("Video ready: %s\nspent %s $HERO", video, fmtNum(num(d["charged"]))), nil
 	case "generate_audio":
+		prompt, err := promptArg(a)
+		if err != nil {
+			return "", err
+		}
 		model := str(a["model"])
 		if model == "" {
 			model = "openai/gpt-audio-mini"
 		}
-		d, err := runModel(model, str(a["prompt"]), "audio", a["consent"] == true)
+		d, err := runModel(model, prompt, "audio", a["consent"] == true)
 		if err != nil {
 			return "", err
 		}
@@ -193,12 +316,15 @@ func callTool(name string, a map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if e, ok := apiError(d); ok {
+			return "", fmt.Errorf("%s", e)
+		}
 		cl, _ := d["claimable"].(map[string]any)
 		t0, t1 := "?", "?"
 		if cl != nil {
-			t0, t1 = str(cl["token0"]), str(cl["token1"])
+			t0, t1 = plain(cl["token0"], "?"), plain(cl["token1"], "?")
 		}
-		return fmt.Sprintf("Treasury %s\nClaimable: %s WETH + %s HERO", str(d["treasury"]), t0, t1), nil
+		return fmt.Sprintf("Treasury %s\nClaimable: %s WETH + %s HERO", plain(d["treasury"], "null"), t0, t1), nil
 	case "wallet_balance":
 		if apiKey == "" {
 			return "Set HERO_RUN_KEY to see credits.", nil
@@ -207,12 +333,14 @@ func callTool(name string, a map[string]any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if e, ok := d["error"].(string); ok {
-			return "API key error: " + e, nil
+		// A real API failure is an error, not a balance of zero. Only the
+		// "no key configured" case above stays advisory text.
+		if e, ok := apiError(d); ok {
+			return "", fmt.Errorf("%s", e)
 		}
 		return fmt.Sprintf("Prepaid API key\n%s $HERO credits (deposited %s, spent %s)", fmtNum(num(d["balance"])), fmtNum(num(d["deposited"])), fmtNum(num(d["spent"]))), nil
 	}
-	return "", fmt.Errorf("unknown tool: %s", name)
+	return "", fmt.Errorf("Unknown tool: %s", name)
 }
 
 var toolsJSON = json.RawMessage(`[
@@ -234,11 +362,13 @@ type request struct {
 	} `json:"params"`
 }
 
+// send writes a response. A request with no `id` member is a notification and
+// gets no response at all.
 func send(id json.RawMessage, result any, errObj any) {
-	m := map[string]any{"jsonrpc": "2.0"}
-	if id != nil {
-		m["id"] = id
+	if id == nil {
+		return
 	}
+	m := map[string]any{"jsonrpc": "2.0", "id": id}
 	if errObj != nil {
 		m["error"] = errObj
 	} else {
@@ -248,34 +378,62 @@ func send(id json.RawMessage, result any, errObj any) {
 	os.Stdout.Write(append(b, '\n'))
 }
 
+func sendParseError(msg string) {
+	b, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      nil,
+		"error":   map[string]any{"code": -32700, "message": msg},
+	})
+	os.Stdout.Write(append(b, '\n'))
+}
+
+// Guard rail only: a line this long is not a real request. Anything under it is
+// served normally (bufio.Scanner used to die at 1 MB and answer nothing again).
+const maxLine = 32 * 1024 * 1024
+
 func main() {
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var r request
-		if json.Unmarshal(line, &r) != nil {
-			continue
-		}
-		switch r.Method {
-		case "initialize":
-			send(r.ID, map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "hero-run", "version": "1.0.0"}}, nil)
-		case "tools/list":
-			send(r.ID, map[string]any{"tools": toolsJSON}, nil)
-		case "tools/call":
-			text, err := callTool(r.Params.Name, r.Params.Arguments)
+	rd := bufio.NewReaderSize(os.Stdin, 64*1024)
+	for {
+		line, err := rd.ReadString('\n')
+		if len(line) > maxLine {
+			sendParseError("Parse error: request line exceeds size limit")
 			if err != nil {
-				send(r.ID, nil, map[string]any{"code": -32000, "message": err.Error()})
-			} else {
-				send(r.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}, nil)
+				return
 			}
-		default:
-			if r.ID != nil {
-				send(r.ID, nil, map[string]any{"code": -32601, "message": "Method not found"})
+			continue
+		}
+		if len(bytes.TrimSpace([]byte(line))) > 0 {
+			handle([]byte(line))
+		}
+		if err != nil {
+			if err != io.EOF {
+				sendParseError("Parse error: " + err.Error())
 			}
+			return
+		}
+	}
+}
+
+func handle(line []byte) {
+	var r request
+	if json.Unmarshal(line, &r) != nil {
+		return
+	}
+	switch r.Method {
+	case "initialize":
+		send(r.ID, map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]any{"name": "hero-run", "version": "1.0.0"}}, nil)
+	case "tools/list":
+		send(r.ID, map[string]any{"tools": toolsJSON}, nil)
+	case "tools/call":
+		text, err := callTool(r.Params.Name, r.Params.Arguments)
+		if err != nil {
+			send(r.ID, nil, map[string]any{"code": codeOf(err), "message": err.Error()})
+		} else {
+			send(r.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}, nil)
+		}
+	default:
+		if r.ID != nil {
+			send(r.ID, nil, map[string]any{"code": -32601, "message": "Method not found"})
 		}
 	}
 }

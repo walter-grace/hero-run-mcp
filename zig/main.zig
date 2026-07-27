@@ -37,18 +37,44 @@ fn valF64(v: ?Value) f64 {
     };
 }
 
-fn valStr(v: ?Value) []const u8 {
-    const x = v orelse return "?";
+// Optional string: null when the value is missing or not a string. Callers that
+// want a placeholder use valStr; callers that must tell "missing" apart from a
+// literal "?" use this one.
+fn valStrOpt(v: ?Value) ?[]const u8 {
+    const x = v orelse return null;
     return switch (x) {
         .string => |s| s,
-        else => "?",
+        else => null,
     };
 }
 
-fn hasError(v: Value) ?[]const u8 {
+fn valStr(v: ?Value) []const u8 {
+    return valStrOpt(v) orelse "?";
+}
+
+// Truncate to at most max bytes without splitting a UTF-8 codepoint, so the
+// result is always valid UTF-8 and the JSON-RPC frame stays decodable.
+fn utf8Prefix(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    var n = max;
+    while (n > 0 and (s[n] & 0xC0) == 0x80) n -= 1;
+    return s[0..n];
+}
+
+// Message of a truthy `error` key, if any. An error *object* (not just a
+// string) counts as a failure, so an API error never renders as data.
+fn hasError(arena: std.mem.Allocator, v: Value) ?[]const u8 {
     const e = objGet(v, "error") orelse return null;
-    if (e == .string) return e.string;
-    return null;
+    return switch (e) {
+        .null => null,
+        .bool => |b| if (b) "true" else null,
+        .string => |s| if (s.len == 0) null else s,
+        .number_string => |s| if (s.len == 0) null else s,
+        .integer => |i| if (i == 0) null else (std.fmt.allocPrint(arena, "{d}", .{i}) catch "error"),
+        .float => |f| if (f == 0) null else (std.fmt.allocPrint(arena, "{d}", .{f}) catch "error"),
+        // object / array: render as compact JSON
+        else => std.json.Stringify.valueAlloc(arena, e, .{}) catch "error",
+    };
 }
 
 // append integer round(n) with thousands commas
@@ -144,6 +170,43 @@ fn appendId(list: *List, gpa: std.mem.Allocator, id: ?Value) !void {
 
 const HttpErr = error{ RequestFailed, ParseFailed, OutOfMemory };
 
+// Budget for one request, same as the C++/Rust/Swift ports. std.http.Client has
+// no timeout knob, so the fetch races a timer and loses.
+const HTTP_TIMEOUT_S: i64 = 300;
+
+const FetchOutcome = enum { ok, failed };
+const FetchRace = union(enum) { fetch: FetchOutcome, timer: void };
+
+fn fetchTask(client: *std.http.Client, opts: std.http.Client.FetchOptions) FetchOutcome {
+    _ = client.fetch(opts) catch return .failed;
+    return .ok;
+}
+
+fn timerTask(io: std.Io, seconds: i64) void {
+    io.sleep(std.Io.Duration.fromSeconds(seconds), .awake) catch {};
+}
+
+// client.fetch with a deadline. Returns error.RequestFailed on failure or timeout.
+fn fetchTimeout(client: *std.http.Client, opts: std.http.Client.FetchOptions) HttpErr!void {
+    var buf: [2]FetchRace = undefined;
+    var sel: std.Io.Select(FetchRace) = .init(gio, &buf);
+    // Both tasks need real concurrency; without it, fall back to a plain fetch.
+    sel.concurrent(.fetch, fetchTask, .{ client, opts }) catch {
+        _ = client.fetch(opts) catch return error.RequestFailed;
+        return;
+    };
+    sel.concurrent(.timer, timerTask, .{ gio, HTTP_TIMEOUT_S }) catch {};
+    const first = sel.await() catch {
+        sel.cancelDiscard();
+        return error.RequestFailed;
+    };
+    sel.cancelDiscard(); // cancels whichever task did not win
+    return switch (first) {
+        .fetch => |o| if (o == .ok) {} else error.RequestFailed,
+        .timer => error.RequestFailed,
+    };
+}
+
 // Performs an HTTP request and returns a parsed JSON Value. Caller owns arena.
 fn httpJson(
     arena: std.mem.Allocator,
@@ -167,15 +230,14 @@ fn httpJson(
         extra = hdrs;
     }
 
-    const res = client.fetch(.{
+    try fetchTimeout(&client, .{
         .location = .{ .url = full },
         .method = method,
         .payload = body,
         .headers = .{ .content_type = .{ .override = "application/json" } },
         .extra_headers = extra,
         .response_writer = &sink.writer,
-    }) catch return error.RequestFailed;
-    _ = res;
+    });
 
     const bytes = sink.written();
     const parsed = std.json.parseFromSlice(Value, arena, bytes, .{}) catch return error.ParseFailed;
@@ -186,14 +248,18 @@ fn httpJson(
 // Each returns text on success; on a tool-level error it sets err.* = true and
 // returns the message.
 
-const ToolError = error{ ToolFail, OutOfMemory, RequestFailed, ParseFailed };
+const ToolError = error{ ToolFail, InvalidParams, OutOfMemory, RequestFailed, ParseFailed };
 
-fn toolListModels(arena: std.mem.Allocator, args: Value) ToolError![]u8 {
+fn toolListModels(arena: std.mem.Allocator, args: Value, msg: *[]const u8) ToolError![]u8 {
     const kind_v = objGet(args, "kind");
     const kind: []const u8 = if (kind_v != null and kind_v.? == .string) kind_v.?.string else "all";
 
     const parsed = httpJson(arena, .GET, "/api/models", null, false) catch |e| return e;
     const root = parsed.value;
+    if (hasError(arena, root)) |em| {
+        msg.* = em;
+        return error.ToolFail;
+    }
     const models_v = objGet(root, "models") orelse return error.ToolFail;
     if (models_v != .array) return error.ToolFail;
     const models = models_v.array.items;
@@ -278,13 +344,17 @@ fn toolRun(arena: std.mem.Allocator, args: Value, run_kind: RunKind, msg: *[]con
         .audio => "openai/gpt-audio-mini",
     };
     const model = argStr(args, "model", default_model);
-    const prompt = argStr(args, "prompt", "");
+    // prompt is required and must be a string -- reject before spending anything.
+    const prompt = valStrOpt(objGet(args, "prompt")) orelse {
+        msg.* = "Invalid params: prompt must be a string";
+        return error.InvalidParams;
+    };
     const consent = argBool(args, "consent");
     const kind: []const u8 = @tagName(run_kind);
 
     const parsed = runModel(arena, model, prompt, kind, consent) catch |e| return e;
     const d = parsed.value;
-    if (hasError(d)) |em| {
+    if (hasError(arena, d)) |em| {
         msg.* = em;
         return error.ToolFail;
     }
@@ -294,7 +364,7 @@ fn toolRun(arena: std.mem.Allocator, args: Value, run_kind: RunKind, msg: *[]con
         const img_v = objGet(d, "image");
         if (img_v != null and img_v.? == .string and img_v.?.string.len > 0) {
             const img = img_v.?.string;
-            const slice = img[0..@min(img.len, 80)];
+            const slice = utf8Prefix(img, 80);
             try out.appendSlice(arena, "Image: ");
             try out.appendSlice(arena, slice);
             try out.appendSlice(arena, "\xe2\x80\xa6\nspent "); // …
@@ -318,13 +388,11 @@ fn toolRun(arena: std.mem.Allocator, args: Value, run_kind: RunKind, msg: *[]con
         const aud_v = objGet(d, "audio");
         if (aud_v != null and aud_v.? == .string and aud_v.?.string.len > 0) {
             const aud = aud_v.?.string;
-            // base64 data URI → an 80-byte prefix is ASCII-safe
-            const slice = aud[0..@min(aud.len, 80)];
+            const slice = utf8Prefix(aud, 80);
             try out.appendSlice(arena, "Audio: ");
             try out.appendSlice(arena, slice);
             try out.appendSlice(arena, "\xe2\x80\xa6\n"); // …
-            const text = valStr(objGet(d, "text"));
-            try out.appendSlice(arena, if (std.mem.eql(u8, text, "?")) "" else text);
+            try out.appendSlice(arena, valStrOpt(objGet(d, "text")) orelse "");
             try out.appendSlice(arena, "\nspent ");
             try appendCommas(&out, arena, valF64(objGet(d, "charged")));
             try out.appendSlice(arena, " $HERO");
@@ -332,8 +400,7 @@ fn toolRun(arena: std.mem.Allocator, args: Value, run_kind: RunKind, msg: *[]con
             try out.appendSlice(arena, "No audio returned.");
         }
     } else {
-        const text = valStr(objGet(d, "text"));
-        try out.appendSlice(arena, if (std.mem.eql(u8, text, "?")) "" else text);
+        try out.appendSlice(arena, valStrOpt(objGet(d, "text")) orelse "");
         try out.appendSlice(arena, "\n\n\xe2\x80\x94 "); // \n\n—
         // autoModel || model
         const am_v = objGet(d, "autoModel");
@@ -351,9 +418,13 @@ fn toolRun(arena: std.mem.Allocator, args: Value, run_kind: RunKind, msg: *[]con
     return out.items;
 }
 
-fn toolTreasury(arena: std.mem.Allocator) ToolError![]u8 {
+fn toolTreasury(arena: std.mem.Allocator, msg: *[]const u8) ToolError![]u8 {
     const parsed = httpJson(arena, .GET, "/api/treasury", null, false) catch |e| return e;
     const t = parsed.value;
+    if (hasError(arena, t)) |em| {
+        msg.* = em;
+        return error.ToolFail;
+    }
     var out: List = .empty;
     try out.appendSlice(arena, "Treasury ");
     try out.appendSlice(arena, valStr(objGet(t, "treasury")));
@@ -391,9 +462,12 @@ fn toolWallet(arena: std.mem.Allocator, msg: *[]const u8) ToolError![]u8 {
     }
     const parsed = httpJson(arena, .GET, "/api/keys/info", null, true) catch |e| return e;
     const d = parsed.value;
-    _ = msg;
-    if (hasError(d)) |em| {
-        return std.fmt.allocPrint(arena, "API key error: {s}", .{em}) catch error.OutOfMemory;
+    // A transport/decode failure and an API error envelope are both real
+    // failures, so both become an MCP error rather than a fabricated zero
+    // balance. Only the "no key configured" case above stays advisory text.
+    if (hasError(arena, d)) |em| {
+        msg.* = em;
+        return error.ToolFail;
     }
     var out: List = .empty;
     try out.appendSlice(arena, "Prepaid API key\n");
@@ -446,6 +520,7 @@ fn handleLine(gpa: std.mem.Allocator, line: []const u8) void {
     var resp: List = .empty;
 
     if (std.mem.eql(u8, method, "initialize")) {
+        if (!id_present) return; // notification: handled, but never answered
         resp.appendSlice(arena, "{\"jsonrpc\":\"2.0\",\"id\":") catch return;
         appendId(&resp, arena, id_v) catch return;
         resp.appendSlice(arena, ",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"hero-run\",\"version\":\"1.0.0\"}}}") catch return;
@@ -454,6 +529,7 @@ fn handleLine(gpa: std.mem.Allocator, line: []const u8) void {
     }
 
     if (std.mem.eql(u8, method, "tools/list")) {
+        if (!id_present) return; // notification: handled, but never answered
         resp.appendSlice(arena, "{\"jsonrpc\":\"2.0\",\"id\":") catch return;
         appendId(&resp, arena, id_v) catch return;
         resp.appendSlice(arena, ",\"result\":{\"tools\":") catch return;
@@ -471,59 +547,71 @@ fn handleLine(gpa: std.mem.Allocator, line: []const u8) void {
 
         var msg: []const u8 = "";
         var is_err = false;
+        var code: i32 = -32000;
         var text: []const u8 = "";
 
         if (std.mem.eql(u8, name, "list_models")) {
-            text = toolListModels(arena, args) catch |e| blk: {
+            text = toolListModels(arena, args, &msg) catch |e| blk: {
                 is_err = true;
-                msg = errMsg(e);
+                code = errCode(e);
+                if (e == error.ToolFail or e == error.InvalidParams) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "run_text")) {
             text = toolRun(arena, args, .text, &msg) catch |e| blk: {
                 is_err = true;
-                if (e == error.ToolFail) {} else msg = errMsg(e);
+                code = errCode(e);
+                if (e == error.ToolFail or e == error.InvalidParams) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "generate_image")) {
             text = toolRun(arena, args, .image, &msg) catch |e| blk: {
                 is_err = true;
-                if (e == error.ToolFail) {} else msg = errMsg(e);
+                code = errCode(e);
+                if (e == error.ToolFail or e == error.InvalidParams) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "generate_video")) {
             text = toolRun(arena, args, .video, &msg) catch |e| blk: {
                 is_err = true;
-                if (e == error.ToolFail) {} else msg = errMsg(e);
+                code = errCode(e);
+                if (e == error.ToolFail or e == error.InvalidParams) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "generate_audio")) {
             text = toolRun(arena, args, .audio, &msg) catch |e| blk: {
                 is_err = true;
-                if (e == error.ToolFail) {} else msg = errMsg(e);
+                code = errCode(e);
+                if (e == error.ToolFail or e == error.InvalidParams) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "treasury_stats")) {
-            text = toolTreasury(arena) catch |e| blk: {
+            text = toolTreasury(arena, &msg) catch |e| blk: {
                 is_err = true;
-                msg = errMsg(e);
+                code = errCode(e);
+                if (e == error.ToolFail or e == error.InvalidParams) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else if (std.mem.eql(u8, name, "wallet_balance")) {
             text = toolWallet(arena, &msg) catch |e| blk: {
                 is_err = true;
-                msg = errMsg(e);
+                code = errCode(e);
+                if (e == error.ToolFail or e == error.InvalidParams) {} else msg = errMsg(e);
                 break :blk "";
             };
         } else {
             is_err = true;
-            msg = "Unknown tool";
+            msg = std.fmt.allocPrint(arena, "Unknown tool: {s}", .{name}) catch "Unknown tool: ";
         }
 
+        if (!id_present) return; // notification: handled, but never answered
         resp.appendSlice(arena, "{\"jsonrpc\":\"2.0\",\"id\":") catch return;
         appendId(&resp, arena, id_v) catch return;
         if (is_err) {
-            resp.appendSlice(arena, ",\"error\":{\"code\":-32000,\"message\":\"") catch return;
+            resp.appendSlice(arena, ",\"error\":{\"code\":") catch return;
+            var cbuf: [12]u8 = undefined;
+            resp.appendSlice(arena, std.fmt.bufPrint(&cbuf, "{d}", .{code}) catch "-32000") catch return;
+            resp.appendSlice(arena, ",\"message\":\"") catch return;
             appendJsonEscaped(&resp, arena, msg) catch return;
             resp.appendSlice(arena, "\"}}") catch return;
         } else {
@@ -545,9 +633,14 @@ fn handleLine(gpa: std.mem.Allocator, line: []const u8) void {
     // notification (no id) → no response
 }
 
+fn errCode(e: ToolError) i32 {
+    return if (e == error.InvalidParams) -32602 else -32000;
+}
+
 fn errMsg(e: ToolError) []const u8 {
     return switch (e) {
         error.ToolFail => "Tool failed",
+        error.InvalidParams => "Invalid params",
         error.OutOfMemory => "Out of memory",
         error.RequestFailed => "Request failed",
         error.ParseFailed => "Invalid response",

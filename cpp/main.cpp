@@ -51,6 +51,11 @@ static bool js_truthy(const json* v) {
     return true; // objects and arrays are truthy
 }
 
+// Strict JSON boolean: only a real `true` counts (consent must not vary by runtime).
+static bool strict_bool(const json* v) {
+    return v != nullptr && v->is_boolean() && v->get<bool>();
+}
+
 // Template-literal rendering: `${v}` (undefined -> "undefined", null -> "null").
 static std::string js_display(const json* v) {
     if (!v) return "undefined";
@@ -83,6 +88,22 @@ static double js_number(const json* v) {
         return d;
     }
     return std::nan("");
+}
+
+// Message of a truthy `error` key, if any. An error *object* (not just a
+// string) counts as a failure, so an API error never renders as data.
+static bool api_error(const json& d, std::string* out) {
+    const json* e = get(d, "error");
+    if (!js_truthy(e)) return false;
+    *out = e->is_string() ? e->get<std::string>() : e->dump();
+    return true;
+}
+
+// Throws on an error envelope; otherwise passes the decoded body through.
+static const json& ok(const json& d) {
+    std::string e;
+    if (api_error(d, &e)) throw std::runtime_error(e);
+    return d;
 }
 
 // fmt = Math.round(Number(n) || 0).toLocaleString("en-US")
@@ -162,6 +183,19 @@ static json http_json(const std::string& path, bool post, const std::string* bod
 // Tool implementations (mirror node/index.mjs IMPL)
 // ---------------------------------------------------------------------------
 
+// A tool error carrying a JSON-RPC error code (-32602 = invalid params).
+struct RpcError : std::runtime_error {
+    int code;
+    RpcError(int c, const std::string& m) : std::runtime_error(m), code(c) {}
+};
+
+// prompt is required and must be a string -- reject before spending anything.
+static const json* need_prompt(const json& a) {
+    const json* p = get(a, "prompt");
+    if (!p || !p->is_string()) throw RpcError(-32602, "Invalid params: prompt must be a string");
+    return p;
+}
+
 static json run_model(const std::string& model, const json* prompt, const char* kind, bool consent) {
     if (KEY.empty()) throw std::runtime_error("Set HERO_RUN_KEY (mint at /keys) to run models.");
     json b = json::object();
@@ -171,9 +205,7 @@ static json run_model(const std::string& model, const json* prompt, const char* 
     b["consent"] = consent;
     std::string bs = b.dump();
     json d = http_json("/api/run", true, &bs, true);
-    const json* err = get(d, "error");
-    if (js_truthy(err)) throw std::runtime_error(js_display(err));
-    return d;
+    return ok(d);
 }
 
 // model || default (falsy model string falls back)
@@ -184,8 +216,9 @@ static std::string model_or(const json& a, const char* dflt) {
 
 static std::string tool_list_models(const json& a) {
     const json* kindv = get(a, "kind"); // default "all" only when undefined
-    bool all = kindv == nullptr || (kindv->is_string() && kindv->get<std::string>() == "all");
-    json d = http_json("/api/models", false, nullptr, false);
+    // null / absent / non-string kind all mean "no filter".
+    bool all = kindv == nullptr || !kindv->is_string() || kindv->get<std::string>() == "all";
+    json d = ok(http_json("/api/models", false, nullptr, false));
     const json* models = get(d, "models");
     if (!models || !models->is_array())
         throw std::runtime_error("Cannot read properties of undefined (reading 'filter')");
@@ -204,7 +237,7 @@ static std::string tool_list_models(const json& a) {
 }
 
 static std::string tool_run_text(const json& a) {
-    json d = run_model(model_or(a, "auto"), get(a, "prompt"), "text", js_truthy(get(a, "consent")));
+    json d = run_model(model_or(a, "auto"), need_prompt(a), "text", strict_bool(get(a, "consent")));
     const json* am = get(d, "autoModel");
     std::string model = js_truthy(am) ? js_display(am) : js_display(get(d, "model"));
     return js_display(get(d, "text")) + "\n\n— " + model + " · spent " +
@@ -212,8 +245,8 @@ static std::string tool_run_text(const json& a) {
 }
 
 static std::string tool_generate_image(const json& a) {
-    json d = run_model(model_or(a, "google/gemini-2.5-flash-image"), get(a, "prompt"), "image",
-                       js_truthy(get(a, "consent")));
+    json d = run_model(model_or(a, "google/gemini-2.5-flash-image"), need_prompt(a), "image",
+                       strict_bool(get(a, "consent")));
     const json* img = get(d, "image");
     if (!js_truthy(img)) return "No image returned.";
     return "Image: " + slice80(js_display(img)) + "…\nspent " + fmt(get(d, "charged")) +
@@ -221,16 +254,16 @@ static std::string tool_generate_image(const json& a) {
 }
 
 static std::string tool_generate_video(const json& a) {
-    json d = run_model(model_or(a, "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast"), get(a, "prompt"),
-                       "video", js_truthy(get(a, "consent")));
+    json d = run_model(model_or(a, "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast"), need_prompt(a),
+                       "video", strict_bool(get(a, "consent")));
     const json* vid = get(d, "video");
     if (!js_truthy(vid)) return "No video returned.";
     return "Video ready: " + js_display(vid) + "\nspent " + fmt(get(d, "charged")) + " $HERO";
 }
 
 static std::string tool_generate_audio(const json& a) {
-    json d = run_model(model_or(a, "openai/gpt-audio-mini"), get(a, "prompt"), "audio",
-                       js_truthy(get(a, "consent")));
+    json d = run_model(model_or(a, "openai/gpt-audio-mini"), need_prompt(a), "audio",
+                       strict_bool(get(a, "consent")));
     const json* aud = get(d, "audio");
     if (!js_truthy(aud)) return "No audio returned.";
     const json* txt = get(d, "text");
@@ -240,7 +273,7 @@ static std::string tool_generate_audio(const json& a) {
 }
 
 static std::string tool_treasury_stats(const json&) {
-    json t = http_json("/api/treasury", false, nullptr, false);
+    json t = ok(http_json("/api/treasury", false, nullptr, false));
     const json* cl = get(t, "claimable");
     const json* t0 = cl ? get(*cl, "token0") : nullptr;
     const json* t1 = cl ? get(*cl, "token1") : nullptr;
@@ -252,9 +285,10 @@ static std::string tool_treasury_stats(const json&) {
 
 static std::string tool_wallet_balance(const json&) {
     if (KEY.empty()) return "Set HERO_RUN_KEY to see credits.";
-    json d = http_json("/api/keys/info", false, nullptr, true);
-    const json* err = get(d, "error");
-    if (js_truthy(err)) return "API key error: " + js_display(err);
+    // A transport/decode failure and an API error envelope are both real
+    // failures, so both become an MCP error rather than a fabricated zero
+    // balance. Only the "no key configured" case above stays advisory text.
+    json d = ok(http_json("/api/keys/info", false, nullptr, true));
     return "Prepaid API key\n" + fmt(get(d, "balance")) + " $HERO credits (deposited " +
            fmt(get(d, "deposited")) + ", spent " + fmt(get(d, "spent")) + ")";
 }
@@ -267,8 +301,7 @@ static std::string call_tool(const std::string& name, const json& args) {
     if (name == "generate_audio") return tool_generate_audio(args);
     if (name == "treasury_stats") return tool_treasury_stats(args);
     if (name == "wallet_balance") return tool_wallet_balance(args);
-    // Same message V8 produces for IMPL[params.name](...) on an unknown name.
-    throw std::runtime_error("IMPL[params.name] is not a function");
+    throw std::runtime_error("Unknown tool: " + name);
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +327,8 @@ int main() {
         json m = json::parse(line, nullptr, false);
         if (m.is_discarded()) continue;
         const json* idp = get(m, "id");
-        bool has_id = idp != nullptr; // JSON.stringify drops an undefined id
+        // No id member at all = a notification: handle it, but never answer.
+        bool has_id = idp != nullptr;
         json id = has_id ? *idp : json(nullptr);
         const json* methodp = get(m, "method");
         std::string method = (methodp && methodp->is_string()) ? methodp->get<std::string>() : "";
@@ -302,48 +336,45 @@ int main() {
         if (method == "initialize") {
             json r;
             r["jsonrpc"] = "2.0";
-            if (has_id) r["id"] = id;
+            r["id"] = id;
             r["result"]["protocolVersion"] = "2024-11-05";
             r["result"]["capabilities"]["tools"] = json::object();
             r["result"]["serverInfo"]["name"] = "hero-run";
             r["result"]["serverInfo"]["version"] = "1.0.0";
-            send_raw(r.dump());
+            if (has_id) send_raw(r.dump());
         } else if (method == "tools/list") {
             // Raw splice for byte-identical output vs the Node reference.
-            std::string r = "{\"jsonrpc\":\"2.0\",";
-            if (has_id) r += "\"id\":" + id.dump() + ",";
-            r += "\"result\":{\"tools\":";
+            std::string r = "{\"jsonrpc\":\"2.0\",\"id\":" + id.dump() +
+                            ",\"result\":{\"tools\":";
             r += TOOLS_JSON;
             r += "}}";
-            send_raw(r);
+            if (has_id) send_raw(r);
         } else if (method == "tools/call") {
             const json* params = get(m, "params");
             try {
-                if (!params)
-                    throw std::runtime_error(
-                        "Cannot read properties of undefined (reading 'name')");
-                const json* namep = get(*params, "name");
+                const json* namep = params ? get(*params, "name") : nullptr;
                 std::string name =
                     (namep && namep->is_string()) ? namep->get<std::string>() : "";
-                const json* argsp = get(*params, "arguments");
-                json args = (argsp && !argsp->is_null()) ? *argsp : json::object();
+                const json* argsp = params ? get(*params, "arguments") : nullptr;
+                json args = (argsp && argsp->is_object()) ? *argsp : json::object();
                 std::string text = call_tool(name, args);
                 json r;
                 r["jsonrpc"] = "2.0";
-                if (has_id) r["id"] = id;
+                r["id"] = id;
                 r["result"]["content"] = json::array();
                 json item;
                 item["type"] = "text";
                 item["text"] = text;
                 r["result"]["content"].push_back(item);
-                send_raw(r.dump());
+                if (has_id) send_raw(r.dump());
             } catch (const std::exception& e) {
+                const RpcError* rpc = dynamic_cast<const RpcError*>(&e);
                 json r;
                 r["jsonrpc"] = "2.0";
-                if (has_id) r["id"] = id;
-                r["error"]["code"] = -32000;
+                r["id"] = id;
+                r["error"]["code"] = rpc ? rpc->code : -32000;
                 r["error"]["message"] = e.what();
-                send_raw(r.dump());
+                if (has_id) send_raw(r.dump());
             }
         } else if (has_id && !id.is_null()) {
             json r;

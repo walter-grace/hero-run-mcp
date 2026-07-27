@@ -48,6 +48,44 @@ func str(_ v: Any?) -> String? {
     return nil
 }
 
+// A non-empty string, or nil — so "" falls back to the default like `||` does.
+func nonEmpty(_ v: Any?) -> String? {
+    if let s = v as? String, !s.isEmpty { return s }
+    return nil
+}
+
+func isBool(_ n: NSNumber) -> Bool { CFGetTypeID(n) == CFBooleanGetTypeID() }
+
+// Strict JSON boolean: only a real `true` counts. `as? Bool` alone would also
+// accept the number 1, which must not stand in for consent on a paid run.
+func boolArg(_ v: Any?) -> Bool {
+    guard let n = v as? NSNumber, isBool(n) else { return false }
+    return n.boolValue
+}
+
+// Render any JSON value plainly (string without quotes, number as-is).
+func plain(_ v: Any?, _ fallback: String) -> String {
+    guard let v = v, !(v is NSNull) else { return fallback }
+    if let s = v as? String { return s }
+    if let n = v as? NSNumber { return isBool(n) ? (n.boolValue ? "true" : "false") : n.stringValue }
+    if let d = try? JSONSerialization.data(withJSONObject: v, options: [.fragmentsAllowed]),
+       let s = String(data: d, encoding: .utf8) { return s }
+    return "\(v)"
+}
+
+// Message of a truthy `error` field, if any. An error *object* (not just a
+// string) counts as a failure, as does the `error` http() sets on a transport
+// failure.
+func apiError(_ d: [String: Any]) -> String? {
+    guard let e = d["error"], !(e is NSNull) else { return nil }
+    if let s = e as? String { return s.isEmpty ? nil : s }
+    if let n = e as? NSNumber {
+        if isBool(n) { return n.boolValue ? "true" : nil }
+        return n.doubleValue == 0 ? nil : n.stringValue
+    }
+    return plain(e, "")
+}
+
 // ---- HTTP (synchronous via semaphore) --------------------------------------
 
 // Long timeout: video generation can take 1-3 minutes (URLSession default is 60s).
@@ -111,20 +149,40 @@ let TOOLS = (try? JSONSerialization.jsonObject(with: toolsJSON.data(using: .utf8
 
 // ---- tool implementations ---------------------------------------------------
 
-struct ToolError: Error { let message: String }
+struct ToolError: Error {
+    let code: Int
+    let message: String
+    init(code: Int = -32000, message: String) {
+        self.code = code
+        self.message = message
+    }
+}
+
+// A string `prompt` is required — validate before any (billed) HTTP call.
+func promptArg(_ a: [String: Any]) throws -> String {
+    guard let v = a["prompt"], !(v is NSNull) else {
+        throw ToolError(code: -32602, message: "Invalid params: prompt must be a string")
+    }
+    guard let s = v as? String else {
+        throw ToolError(code: -32602, message: "Invalid params: prompt must be a string")
+    }
+    return s
+}
 
 func runModel(_ id: String, _ input: String, _ kind: String, _ consent: Bool) throws -> [String: Any] {
     if KEY.isEmpty { throw ToolError(message: "Set HERO_RUN_KEY (mint at /keys) to run models.") }
     let d = http("/api/run", method: "POST",
                  body: ["model": id, "input": input, "kind": kind, "consent": consent],
                  useKey: true)
-    if let e = str(d["error"]) { throw ToolError(message: e) }
+    if let e = apiError(d) { throw ToolError(message: e) }
     return d
 }
 
 func t_list_models(_ a: [String: Any]) throws -> String {
     let kind = str(a["kind"]) ?? "all"
-    let all = (http("/api/models")["models"] as? [[String: Any]]) ?? []
+    let d = http("/api/models")
+    if let e = apiError(d) { throw ToolError(message: e) }
+    let all = (d["models"] as? [[String: Any]]) ?? []
     let ms = all.filter { kind == "all" || (str($0["kind"]) == kind) }
     let rows = ms.prefix(60).map { m -> String in
         let hero = padStart(fmt(m["hero"]), 9)
@@ -136,13 +194,15 @@ func t_list_models(_ a: [String: Any]) throws -> String {
 }
 
 func t_run_text(_ a: [String: Any]) throws -> String {
-    let d = try runModel(str(a["model"]) ?? "auto", str(a["prompt"]) ?? "", "text", (a["consent"] as? Bool) ?? false)
-    let model = str(d["autoModel"]) ?? str(d["model"]) ?? ""
+    let prompt = try promptArg(a)
+    let d = try runModel(nonEmpty(a["model"]) ?? "auto", prompt, "text", boolArg(a["consent"]))
+    let model = nonEmpty(d["autoModel"]) ?? nonEmpty(d["model"]) ?? ""
     return "\(str(d["text"]) ?? "")\n\n— \(model) · spent \(fmt(d["charged"])) $HERO"
 }
 
 func t_generate_image(_ a: [String: Any]) throws -> String {
-    let d = try runModel(str(a["model"]) ?? "google/gemini-2.5-flash-image", str(a["prompt"]) ?? "", "image", (a["consent"] as? Bool) ?? false)
+    let prompt = try promptArg(a)
+    let d = try runModel(nonEmpty(a["model"]) ?? "google/gemini-2.5-flash-image", prompt, "image", boolArg(a["consent"]))
     if let img = str(d["image"]) {
         let clip = String(img.prefix(80))
         return "Image: \(clip)…\nspent \(fmt(d["charged"])) $HERO"
@@ -151,7 +211,8 @@ func t_generate_image(_ a: [String: Any]) throws -> String {
 }
 
 func t_generate_video(_ a: [String: Any]) throws -> String {
-    let d = try runModel(str(a["model"]) ?? "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast", str(a["prompt"]) ?? "", "video", (a["consent"] as? Bool) ?? false)
+    let prompt = try promptArg(a)
+    let d = try runModel(nonEmpty(a["model"]) ?? "wavespeed-ai/wan-2.2/t2v-480p-ultra-fast", prompt, "video", boolArg(a["consent"]))
     if let video = str(d["video"]) {
         return "Video ready: \(video)\nspent \(fmt(d["charged"])) $HERO"
     }
@@ -159,7 +220,8 @@ func t_generate_video(_ a: [String: Any]) throws -> String {
 }
 
 func t_generate_audio(_ a: [String: Any]) throws -> String {
-    let d = try runModel(str(a["model"]) ?? "openai/gpt-audio-mini", str(a["prompt"]) ?? "", "audio", (a["consent"] as? Bool) ?? false)
+    let prompt = try promptArg(a)
+    let d = try runModel(nonEmpty(a["model"]) ?? "openai/gpt-audio-mini", prompt, "audio", boolArg(a["consent"]))
     if let audio = str(d["audio"]) {
         let clip = String(audio.prefix(80))
         return "Audio: \(clip)…\n\(str(d["text"]) ?? "")\nspent \(fmt(d["charged"])) $HERO"
@@ -169,17 +231,22 @@ func t_generate_audio(_ a: [String: Any]) throws -> String {
 
 func t_treasury_stats(_ a: [String: Any]) throws -> String {
     let t = http("/api/treasury")
+    if let e = apiError(t) { throw ToolError(message: e) }
     let cl = (t["claimable"] as? [String: Any]) ?? [:]
-    let tok0 = cl["token0"].map { "\($0)" } ?? "?"
-    let tok1 = cl["token1"].map { "\($0)" } ?? "?"
-    let treasury = t["treasury"].map { "\($0)" } ?? "?"
+    let tok0 = plain(cl["token0"], "?")
+    let tok1 = plain(cl["token1"], "?")
+    let treasury = plain(t["treasury"], "?")
     return "Treasury \(treasury)\nClaimable: \(tok0) WETH + \(tok1) HERO"
 }
 
 func t_wallet_balance(_ a: [String: Any]) throws -> String {
     if KEY.isEmpty { return "Set HERO_RUN_KEY to see credits." }
     let d = http("/api/keys/info", useKey: true)
-    if let e = str(d["error"]) { return "API key error: " + e }
+    // A transport/decode failure and an API error envelope both land in
+    // `error`; both are real failures, so both become an MCP error rather than
+    // a fabricated zero balance. Only the "no key configured" case above stays
+    // advisory text.
+    if let e = apiError(d) { throw ToolError(message: e) }
     return "Prepaid API key\n\(fmt(d["balance"])) $HERO credits (deposited \(fmt(d["deposited"])), spent \(fmt(d["spent"])))"
 }
 
@@ -202,7 +269,7 @@ func send(_ o: [String: Any]) {
     fflush(stdout)
 }
 
-// non-null id, or nil for notifications
+// non-null id, or nil for a missing / null id
 func rpcId(_ m: [String: Any]) -> Any? {
     guard let v = m["id"], !(v is NSNull) else { return nil }
     return v
@@ -215,30 +282,41 @@ while let line = readLine(strippingNewline: true) {
           let m = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
 
     let method = str(m["method"])
+    // No `id` member at all = notification: process it, answer nothing.
+    let hasId = m["id"] != nil
+    let rid: Any = m["id"] ?? NSNull()
     let id = rpcId(m)
     let params = (m["params"] as? [String: Any]) ?? [:]
 
     if method == "initialize" {
-        send(["jsonrpc": "2.0", "id": id ?? NSNull(),
-              "result": ["protocolVersion": "2024-11-05", "capabilities": ["tools": [:]],
-                         "serverInfo": ["name": "hero-run", "version": "1.0.0"]]])
+        if hasId {
+            send(["jsonrpc": "2.0", "id": rid,
+                  "result": ["protocolVersion": "2024-11-05", "capabilities": ["tools": [:]],
+                             "serverInfo": ["name": "hero-run", "version": "1.0.0"]]])
+        }
     } else if method == "tools/list" {
-        send(["jsonrpc": "2.0", "id": id ?? NSNull(), "result": ["tools": TOOLS]])
+        if hasId { send(["jsonrpc": "2.0", "id": rid, "result": ["tools": TOOLS]]) }
     } else if method == "tools/call" {
         let name = str(params["name"]) ?? ""
         let args = (params["arguments"] as? [String: Any]) ?? [:]
         if let fn = IMPL[name] {
             do {
                 let text = try fn(args)
-                send(["jsonrpc": "2.0", "id": id ?? NSNull(),
-                      "result": ["content": [["type": "text", "text": text]]]])
+                if hasId {
+                    send(["jsonrpc": "2.0", "id": rid,
+                          "result": ["content": [["type": "text", "text": text]]]])
+                }
             } catch let e as ToolError {
-                send(["jsonrpc": "2.0", "id": id ?? NSNull(), "error": ["code": -32000, "message": e.message]])
+                if hasId {
+                    send(["jsonrpc": "2.0", "id": rid, "error": ["code": e.code, "message": e.message]])
+                }
             } catch {
-                send(["jsonrpc": "2.0", "id": id ?? NSNull(), "error": ["code": -32000, "message": error.localizedDescription]])
+                if hasId {
+                    send(["jsonrpc": "2.0", "id": rid, "error": ["code": -32000, "message": error.localizedDescription]])
+                }
             }
-        } else if id != nil {
-            send(["jsonrpc": "2.0", "id": id!, "error": ["code": -32000, "message": "Unknown tool: \(name)"]])
+        } else if let id = id {
+            send(["jsonrpc": "2.0", "id": id, "error": ["code": -32000, "message": "Unknown tool: \(name)"]])
         }
     } else if let id = id {
         send(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method not found"]])
