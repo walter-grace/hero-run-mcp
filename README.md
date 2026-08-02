@@ -65,7 +65,7 @@ Run it yourself: `node bench/bench.mjs`
 
 *(macOS arm64, single run. Zig 0.16 / Rust 1.x / Go 1.26 / Apple clang 17 / Swift 6 / Bun 1.3 / Node 25 / Python 3.13.)*
 
-### Reading the numbers honestly
+### What the numbers mean
 
 - **Cold start splits cleanly by compilation.** The five compiled binaries (Zig, Rust, Go, C++, Swift) all boot in under 10 ms; the three runtimes (Bun, Python, Node) take 15 to 44 ms because they boot an interpreter/JIT first. **Zig is fastest at ~2 ms.** This is the only number that matters if a client spawns the server per session.
 - **Throughput is effectively a wash** (~29 to 60k req/s). These are serial round-trips through a Node benchmark client, so the figure is dominated by pipe I/O and the harness, not the server. Every runtime handles orders of magnitude more than a real agent workload (a handful of calls).
