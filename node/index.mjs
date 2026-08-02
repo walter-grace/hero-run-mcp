@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Hero Run MCP server — Node reference implementation (stdio JSON-RPC).
+// Hero Run MCP server: Node reference implementation (stdio JSON-RPC).
 // Any MCP agent can run 500+ AI models paying $HERO per call. Key mode (prepaid
 // credits) only; the API key is read from HERO_RUN_KEY, never hardcoded.
 import { createInterface } from "node:readline";
@@ -20,7 +20,7 @@ const apiError = (d) => {
 };
 // Throws on an error envelope; otherwise passes the decoded body through.
 const ok = (d) => { const e = apiError(d); if (e !== null) throw new Error(e); return d; };
-// prompt is required and must be a string — reject before spending anything.
+// prompt is required and must be a string: reject before spending anything.
 const promptOf = (a) => {
   if (typeof a.prompt !== "string") throw rpcError(-32602, "Invalid params: prompt must be a string");
   return a.prompt;
@@ -52,7 +52,7 @@ const IMPL = {
   },
   async run_text(a) {
     const d = await runModel(a.model || "auto", promptOf(a), "text", a.consent);
-    return `${d.text}\n\n— ${d.autoModel || d.model} · spent ${fmt(d.charged)} $HERO`;
+    return `${d.text}\n\n${d.autoModel || d.model} · spent ${fmt(d.charged)} $HERO`;
   },
   async generate_image(a) {
     const d = await runModel(a.model || "google/gemini-2.5-flash-image", promptOf(a), "image", a.consent);

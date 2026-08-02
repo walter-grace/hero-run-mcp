@@ -64,7 +64,7 @@ async function dispatch(s, n = 2000) {
   return Math.round(n / (el / 1000));
 }
 
-console.log("Hero Run MCP — runtime benchmark (local only, no network, no $HERO spent)\n");
+console.log("Hero Run MCP: runtime benchmark (local only, no network, no $HERO spent)\n");
 const rows = [];
 for (const s of SERVERS) {
   process.stdout.write(`  ${s.name.padEnd(7)} …`);

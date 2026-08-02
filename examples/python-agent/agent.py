@@ -1,4 +1,4 @@
-"""A tiny agent on Hero Run — one dependency, ~40 lines of logic.
+"""A tiny agent on Hero Run: one dependency, ~40 lines of logic.
 
 Hero Run speaks the OpenAI API, so any OpenAI client is already a Hero Run
 client: point base_url at /v1, use model "auto", and the router picks a

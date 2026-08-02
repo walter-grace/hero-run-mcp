@@ -1,4 +1,4 @@
-// Hero Run MCP server — Rust implementation (stdio JSON-RPC).
+// Hero Run MCP server: Rust implementation (stdio JSON-RPC).
 // Any MCP agent can run 500+ AI models paying $HERO per call. Key mode (prepaid
 // credits) only; the API key is read from HERO_RUN_KEY, never hardcoded.
 use serde_json::{json, Value};
@@ -120,7 +120,7 @@ fn str_arg<'a>(a: &'a Value, k: &str) -> &'a str {
     a.get(k).and_then(|v| v.as_str()).unwrap_or("")
 }
 
-// A string `prompt` is required — validate before any (billed) HTTP call.
+// A string `prompt` is required: validate before any (billed) HTTP call.
 fn prompt_arg(a: &Value) -> Result<&str, RpcErr> {
     match a.get("prompt") {
         None | Some(Value::Null) => Err(invalid_params("Invalid params: prompt must be a string")),
@@ -183,7 +183,7 @@ fn call_tool(name: &str, a: &Value) -> Result<String, RpcErr> {
                 _ => d.get("model").and_then(|v| v.as_str()).unwrap_or(""),
             };
             Ok(format!(
-                "{}\n\n— {} · spent {} $HERO",
+                "{}\n\n{} · spent {} $HERO",
                 text,
                 model,
                 fmt(d.get("charged").unwrap_or(&Value::Null))

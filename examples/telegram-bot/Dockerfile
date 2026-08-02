@@ -1,4 +1,4 @@
-# Hero Run Telegram bot — build from the REPO ROOT (needs both go/ and examples/):
+# Hero Run Telegram bot : build from the REPO ROOT (needs both go/ and examples/):
 #   docker build -f examples/telegram-bot/Dockerfile -t hero-run-bot .
 #   docker run -e TELEGRAM_BOT_TOKEN=... -e HERO_RUN_KEY=... hero-run-bot
 FROM golang:1.26-alpine AS build

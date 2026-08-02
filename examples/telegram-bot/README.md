@@ -17,7 +17,7 @@ Telegram  ──long poll──▶  bot (this)  ──stdio JSON-RPC──▶  H
 | `/image <prompt>` | `generate_image` | needs `HERO_RUN_KEY`, returns a photo |
 | `/treasury` | `treasury_stats` | free |
 | `/balance` | `wallet_balance` | shows your prepaid credits |
-| `/help` | — | usage |
+| `/help` |: | usage |
 
 Plain text (no slash) is treated as `/ask`.
 

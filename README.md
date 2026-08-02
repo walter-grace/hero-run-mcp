@@ -2,7 +2,7 @@
 
 One MCP tool surface for running **500+ AI models** (text, image, video, audio), paid in **$HERO** per call. Any MCP-speaking agent (Claude Code, etc.) can list models, run text/image, and read the on-chain treasury. Usage funds open-source AI model training.
 
-Implemented **eight ways** — Zig, Rust, Go, C++, Swift, Bun, Node, Python — so you can pick your runtime, and benchmarked so the choice is informed. Every one is a full server (all tools live). Most ports are **dependency-free** (stdlib / built-in fetch); Rust uses two small crates, and C++ links system libcurl with a vendored nlohmann/json header.
+Implemented **eight ways** (Zig, Rust, Go, C++, Swift, Bun, Node, Python), so you pick your runtime, and benchmarked so the choice is informed. Every one is a full server (all tools live). Most ports are **dependency-free** (stdlib / built-in fetch); Rust uses two small crates, and C++ links system libcurl with a vendored nlohmann/json header.
 
 Learn more at [herorunai.com](https://herorunai.com).
 
@@ -18,7 +18,7 @@ Learn more at [herorunai.com](https://herorunai.com).
 | `treasury_stats` | Read the treasury funding open-source AI (live from Base) |
 | `wallet_balance` | Your prepaid API-key credit balance |
 
-Tip: append `@gateway` to any model id (e.g. `openai/gpt-oss-120b@cerebras`) to pin a specific gateway — no failover, billed at that gateway's own price.
+Tip: append `@gateway` to any model id (e.g. `openai/gpt-oss-120b@cerebras`) to pin a specific gateway: no failover, billed at that gateway's own price.
 
 ## Run it
 
@@ -27,12 +27,12 @@ All eight are stdio JSON-RPC servers with the same tool surface. Mint a prepaid 
 ```bash
 export HERO_RUN_KEY=hr_live_...
 
-# scripting runtimes — run directly
+# scripting runtimes: run directly
 node    node/index.mjs        # Node
 bun     bun/index.ts          # Bun
 python3 python/server.py      # Python
 
-# compiled — build once, then run the binary
+# compiled: build once, then run the binary
 (cd go    && go build -o hero-run-mcp . && ./hero-run-mcp)                      # Go
 (cd rust  && cargo build --release && ./target/release/hero-run-mcp)            # Rust
 (cd zig   && zig build-exe main.zig -O ReleaseSafe -lc --name hero-run-mcp && ./hero-run-mcp)   # Zig 0.16
@@ -83,15 +83,15 @@ The takeaway: for an MCP gateway, **pick the runtime that's easiest to distribut
 
 ## Examples
 
-- **[examples/python-agent](examples/python-agent)** — a tool-using agent in ~40 lines of Python via the standard `openai` client pointed at Hero Run's OpenAI-compatible `/v1` (model `"auto"` = the router).
-- **[examples/go-agent](examples/go-agent)** — the same agent in Go with the standard library only, zero dependencies.
-- **[examples/telegram-bot](examples/telegram-bot)** — a Go Telegram bot that drives the MCP server as a subprocess, turning each chat command (`/ask`, `/image`, `/models`, `/treasury`, `/balance`) into a real `tools/call`. A working reference for *consuming* the server.
+- **[examples/python-agent](examples/python-agent)**: a tool-using agent in ~40 lines of Python via the standard `openai` client pointed at Hero Run's OpenAI-compatible `/v1` (model `"auto"` = the router).
+- **[examples/go-agent](examples/go-agent)**: the same agent in Go with the standard library only, zero dependencies.
+- **[examples/telegram-bot](examples/telegram-bot)**: a Go Telegram bot that drives the MCP server as a subprocess, turning each chat command (`/ask`, `/image`, `/models`, `/treasury`, `/balance`) into a real `tools/call`. A working reference for *consuming* the server.
 
-- **[hero-run-market-maker](https://github.com/walter-grace/hero-run-market-maker)** — a Go market-making bot for $HERO whose optional `-brain` flag consults Hero Run itself for regime calls (routing modes as model ids, @gateway pinning, strict-JSON `response_format`) — the flywheel as a working example.
+- **[hero-run-market-maker](https://github.com/walter-grace/hero-run-market-maker)**: a Go market-making bot for $HERO whose optional `-brain` flag consults Hero Run itself for regime calls (routing modes as model ids, @gateway pinning, strict-JSON `response_format`): the flywheel as a working example.
 
 ## Notes
 
-- These are **key-mode** servers (prepaid credits). The production reference also supports **wallet mode** (`AGENT_PRIVATE_KEY`, pays per call on-chain via viem) — see the main app repo.
+- These are **key-mode** servers (prepaid credits). The production reference also supports **wallet mode** (`AGENT_PRIVATE_KEY`, pays per call on-chain via viem): see the main app repo.
 - The API key is always read from `HERO_RUN_KEY`. Never hardcode it.
 
 ## License

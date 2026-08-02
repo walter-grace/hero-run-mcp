@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hero Run MCP server — Python implementation (stdio JSON-RPC).
+"""Hero Run MCP server: Python implementation (stdio JSON-RPC).
 Any MCP agent can run 500+ AI models paying $HERO per call. Key mode only; the API
 key is read from HERO_RUN_KEY, never hardcoded. Pure stdlib (no pip deps)."""
 import os
@@ -39,7 +39,7 @@ def ok(d):
 
 
 def need_prompt(a):
-    """prompt is required and must be a string — reject before spending anything."""
+    """prompt is required and must be a string: reject before spending anything."""
     p = a.get("prompt")
     if not isinstance(p, str):
         raise RpcError(-32602, "Invalid params: prompt must be a string")
@@ -102,7 +102,7 @@ def t_list_models(a):
 
 def t_run_text(a):
     d = run_model(a.get("model") or "auto", need_prompt(a), "text", a.get("consent"))
-    return f"{d.get('text', '')}\n\n— {d.get('autoModel') or d.get('model')} · spent {fmt(d.get('charged'))} $HERO"
+    return f"{d.get('text', '')}\n\n{d.get('autoModel') or d.get('model')} · spent {fmt(d.get('charged'))} $HERO"
 
 
 def t_generate_image(a):

@@ -12,7 +12,7 @@ primary_region = "iad"
 [env]
   MCP_CMD = "/app/hero-run-mcp"
 
-# One always-on machine. It long-polls Telegram — no inbound ports needed.
+# One always-on machine. It long-polls Telegram : no inbound ports needed.
 [[vm]]
   size = "shared-cpu-1x"
   memory = "256mb"

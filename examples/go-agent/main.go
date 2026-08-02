@@ -1,4 +1,4 @@
-// A tiny agent on Hero Run — Go stdlib only, zero dependencies.
+// A tiny agent on Hero Run: Go stdlib only, zero dependencies.
 //
 // Hero Run speaks the OpenAI API, so an agent is one POST endpoint away:
 // point at /v1/chat/completions, use model "auto", and the router picks a

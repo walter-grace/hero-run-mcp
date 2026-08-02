@@ -1,4 +1,4 @@
-// Hero Run — Telegram bot that drives the Hero Run MCP server.
+// Hero Run: Telegram bot that drives the Hero Run MCP server.
 //
 // The bot spawns an MCP server (any of the repo's language impls) as a
 // subprocess and speaks JSON-RPC 2.0 over stdio, so every Telegram command
@@ -177,7 +177,7 @@ func (t *tg) sendPhoto(chat int64, data []byte, caption string) error {
 
 // ---------- bot ----------
 
-const help = `Hero Run — run 500+ AI models, paid in $HERO.
+const help = `Hero Run: run 500+ AI models, paid in $HERO.
 
 /models [text|image|audio]  list available models
 /ask [model] <prompt>       run a text model
@@ -193,7 +193,7 @@ Add an optional model id first, e.g.
 const selfHost = "This is a public demo, so paid tools are limited to protect a shared balance. Run your own Hero Run bot with your own token and $HERO key (no limits): https://herorunai.com/keys"
 
 // demo mode caps paid usage on a public bot so its shared prepaid key can't be
-// drained. Counters are in-memory (reset on restart) — fine for a demo.
+// drained. Counters are in-memory (reset on restart): fine for a demo.
 type demo struct {
 	on         bool
 	userLimit  int

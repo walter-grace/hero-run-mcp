@@ -1,4 +1,4 @@
-// Hero Run MCP server — C++ implementation (stdio JSON-RPC).
+// Hero Run MCP server: C++ implementation (stdio JSON-RPC).
 // Any MCP agent can run 500+ AI models paying $HERO per call. Key mode (prepaid
 // credits) only; the API key is read from HERO_RUN_KEY, never hardcoded.
 //
@@ -240,7 +240,7 @@ static std::string tool_run_text(const json& a) {
     json d = run_model(model_or(a, "auto"), need_prompt(a), "text", strict_bool(get(a, "consent")));
     const json* am = get(d, "autoModel");
     std::string model = js_truthy(am) ? js_display(am) : js_display(get(d, "model"));
-    return js_display(get(d, "text")) + "\n\n— " + model + " · spent " +
+    return js_display(get(d, "text")) + "\n\n" + model + " · spent " +
            fmt(get(d, "charged")) + " $HERO";
 }
 

@@ -2,7 +2,7 @@
 name = "hero-run-mcp"
 version = "1.0.0"
 edition = "2021"
-description = "Hero Run MCP server (stdio JSON-RPC) — run 500+ AI models paying $HERO per call."
+description = "Hero Run MCP server (stdio JSON-RPC): run 500+ AI models paying $HERO per call."
 license = "MIT"
 
 [[bin]]

@@ -1,4 +1,4 @@
-// Hero Run MCP server — Swift implementation (stdio JSON-RPC).
+// Hero Run MCP server: Swift implementation (stdio JSON-RPC).
 // Any MCP agent can run 500+ AI models paying $HERO per call. Key mode only; the
 // API key is read from HERO_RUN_KEY, never hardcoded. Foundation only (no deps).
 import Foundation
@@ -48,7 +48,7 @@ func str(_ v: Any?) -> String? {
     return nil
 }
 
-// A non-empty string, or nil — so "" falls back to the default like `||` does.
+// A non-empty string, or nil: so "" falls back to the default like `||` does.
 func nonEmpty(_ v: Any?) -> String? {
     if let s = v as? String, !s.isEmpty { return s }
     return nil
@@ -158,7 +158,7 @@ struct ToolError: Error {
     }
 }
 
-// A string `prompt` is required — validate before any (billed) HTTP call.
+// A string `prompt` is required: validate before any (billed) HTTP call.
 func promptArg(_ a: [String: Any]) throws -> String {
     guard let v = a["prompt"], !(v is NSNull) else {
         throw ToolError(code: -32602, message: "Invalid params: prompt must be a string")
@@ -197,7 +197,7 @@ func t_run_text(_ a: [String: Any]) throws -> String {
     let prompt = try promptArg(a)
     let d = try runModel(nonEmpty(a["model"]) ?? "auto", prompt, "text", boolArg(a["consent"]))
     let model = nonEmpty(d["autoModel"]) ?? nonEmpty(d["model"]) ?? ""
-    return "\(str(d["text"]) ?? "")\n\n— \(model) · spent \(fmt(d["charged"])) $HERO"
+    return "\(str(d["text"]) ?? "")\n\n\(model) · spent \(fmt(d["charged"])) $HERO"
 }
 
 func t_generate_image(_ a: [String: Any]) throws -> String {

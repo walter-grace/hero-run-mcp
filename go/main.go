@@ -1,4 +1,4 @@
-// Hero Run MCP server — Go implementation (stdio JSON-RPC).
+// Hero Run MCP server: Go implementation (stdio JSON-RPC).
 // Any MCP agent can run 500+ AI models paying $HERO per call. Key mode only; the API
 // key is read from HERO_RUN_KEY, never hardcoded. Pure stdlib, compiles to one binary.
 package main
@@ -72,7 +72,7 @@ func httpJSON(path, method string, body any, useKey bool) (map[string]any, error
 	defer resp.Body.Close()
 	var out map[string]any
 	// A non-JSON body (HTML error page, empty response) is a failure, not an
-	// empty success — never let it read as "0 credits" / "0 models".
+	// empty success: never let it read as "0 credits" / "0 models".
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("HTTP %d: invalid JSON response from %s", resp.StatusCode, path)
 	}
@@ -250,7 +250,7 @@ func callTool(name string, a map[string]any) (string, error) {
 		if am == "" {
 			am = str(d["model"])
 		}
-		return fmt.Sprintf("%s\n\n— %s · spent %s $HERO", str(d["text"]), am, fmtNum(num(d["charged"]))), nil
+		return fmt.Sprintf("%s\n\n%s · spent %s $HERO", str(d["text"]), am, fmtNum(num(d["charged"]))), nil
 	case "generate_image":
 		prompt, err := promptArg(a)
 		if err != nil {
