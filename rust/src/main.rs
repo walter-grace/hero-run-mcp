@@ -1,11 +1,11 @@
 // Hero Run MCP server — Rust implementation (stdio JSON-RPC).
-// Any MCP agent can run 340+ AI models paying $HERO per call. Key mode (prepaid
+// Any MCP agent can run 500+ AI models paying $HERO per call. Key mode (prepaid
 // credits) only; the API key is read from HERO_RUN_KEY, never hardcoded.
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
 fn base_url() -> String {
-    std::env::var("HERO_RUN_URL").unwrap_or_else(|_| "https://hero-run.vercel.app".to_string())
+    std::env::var("HERO_RUN_URL").unwrap_or_else(|_| "https://herorunai.com".to_string())
 }
 fn key() -> String {
     std::env::var("HERO_RUN_KEY").unwrap_or_default()

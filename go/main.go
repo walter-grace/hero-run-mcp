@@ -1,5 +1,5 @@
 // Hero Run MCP server — Go implementation (stdio JSON-RPC).
-// Any MCP agent can run 340+ AI models paying $HERO per call. Key mode only; the API
+// Any MCP agent can run 500+ AI models paying $HERO per call. Key mode only; the API
 // key is read from HERO_RUN_KEY, never hardcoded. Pure stdlib, compiles to one binary.
 package main
 
@@ -45,7 +45,7 @@ func env(k, d string) string {
 	return d
 }
 
-var baseURL = env("HERO_RUN_URL", "https://hero-run.vercel.app")
+var baseURL = env("HERO_RUN_URL", "https://herorunai.com")
 var apiKey = os.Getenv("HERO_RUN_KEY")
 
 // Video runs can take 1-3 minutes; allow up to 5 minutes for any call.

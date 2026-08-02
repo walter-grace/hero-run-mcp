@@ -4,7 +4,7 @@ A working tool-using agent in ~40 lines of logic, one dependency. Hero Run speak
 
 ```bash
 pip install openai
-export HERO_RUN_KEY=hr_live_...   # mint at https://hero-run.vercel.app/keys
+export HERO_RUN_KEY=hr_live_...   # mint at https://herorunai.com/keys
 python agent.py "what is 127 * 419, and is it prime?"
 ```
 

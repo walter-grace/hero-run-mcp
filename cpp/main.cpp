@@ -1,5 +1,5 @@
 // Hero Run MCP server — C++ implementation (stdio JSON-RPC).
-// Any MCP agent can run 340+ AI models paying $HERO per call. Key mode (prepaid
+// Any MCP agent can run 500+ AI models paying $HERO per call. Key mode (prepaid
 // credits) only; the API key is read from HERO_RUN_KEY, never hardcoded.
 //
 // Build: clang++ -O2 -std=c++17 -Wall main.cpp -lcurl -o hero-run-mcp
@@ -19,7 +19,7 @@
 // Insertion-order-preserving JSON so key order matches the Node reference.
 using json = nlohmann::ordered_json;
 
-static std::string BASE_URL = "https://hero-run.vercel.app";
+static std::string BASE_URL = "https://herorunai.com";
 static std::string KEY;
 
 // ---------------------------------------------------------------------------

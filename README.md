@@ -1,10 +1,10 @@
 # Hero Run MCP server
 
-One MCP tool surface for running **375+ AI models** (text, image, video, audio), paid in **$HERO** per call. Any MCP-speaking agent (Claude Code, etc.) can list models, run text/image, and read the on-chain treasury. Usage funds open-source AI model training.
+One MCP tool surface for running **500+ AI models** (text, image, video, audio), paid in **$HERO** per call. Any MCP-speaking agent (Claude Code, etc.) can list models, run text/image, and read the on-chain treasury. Usage funds open-source AI model training.
 
 Implemented **eight ways** — Zig, Rust, Go, C++, Swift, Bun, Node, Python — so you can pick your runtime, and benchmarked so the choice is informed. Every one is a full server (all tools live). Most ports are **dependency-free** (stdlib / built-in fetch); Rust uses two small crates, and C++ links system libcurl with a vendored nlohmann/json header.
 
-Learn more at [hero-run.vercel.app](https://hero-run.vercel.app).
+Learn more at [herorunai.com](https://herorunai.com).
 
 ## Tools
 
@@ -22,7 +22,7 @@ Tip: append `@gateway` to any model id (e.g. `openai/gpt-oss-120b@cerebras`) to 
 
 ## Run it
 
-All eight are stdio JSON-RPC servers with the same tool surface. Mint a prepaid key at [/keys](https://hero-run.vercel.app/keys) and set `HERO_RUN_KEY`.
+All eight are stdio JSON-RPC servers with the same tool surface. Mint a prepaid key at [/keys](https://herorunai.com/keys) and set `HERO_RUN_KEY`.
 
 ```bash
 export HERO_RUN_KEY=hr_live_...

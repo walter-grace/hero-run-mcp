@@ -1,9 +1,9 @@
 // Hero Run MCP server — Swift implementation (stdio JSON-RPC).
-// Any MCP agent can run 340+ AI models paying $HERO per call. Key mode only; the
+// Any MCP agent can run 500+ AI models paying $HERO per call. Key mode only; the
 // API key is read from HERO_RUN_KEY, never hardcoded. Foundation only (no deps).
 import Foundation
 
-let baseURL = ProcessInfo.processInfo.environment["HERO_RUN_URL"] ?? "https://hero-run.vercel.app"
+let baseURL = ProcessInfo.processInfo.environment["HERO_RUN_URL"] ?? "https://herorunai.com"
 let KEY = ProcessInfo.processInfo.environment["HERO_RUN_KEY"] ?? ""
 
 // ---- helpers ----------------------------------------------------------------

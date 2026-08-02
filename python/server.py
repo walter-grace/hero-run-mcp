@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hero Run MCP server — Python implementation (stdio JSON-RPC).
-Any MCP agent can run 340+ AI models paying $HERO per call. Key mode only; the API
+Any MCP agent can run 500+ AI models paying $HERO per call. Key mode only; the API
 key is read from HERO_RUN_KEY, never hardcoded. Pure stdlib (no pip deps)."""
 import os
 import sys
@@ -8,7 +8,7 @@ import json
 import urllib.request
 import urllib.error
 
-URL = os.environ.get("HERO_RUN_URL", "https://hero-run.vercel.app")
+URL = os.environ.get("HERO_RUN_URL", "https://herorunai.com")
 KEY = os.environ.get("HERO_RUN_KEY", "")
 TIMEOUT = 300  # seconds; same budget for a request as every other port
 

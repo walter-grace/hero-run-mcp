@@ -4,7 +4,7 @@
 // point at /v1/chat/completions, use model "auto", and the router picks a
 // right-sized model for every step, billed in $HERO from your prepaid key.
 //
-//	export HERO_RUN_KEY=hr_live_...   # mint at https://hero-run.vercel.app/keys
+//	export HERO_RUN_KEY=hr_live_...   # mint at https://herorunai.com/keys
 //	go run . "what is 127 * 419, and is it prime?"
 package main
 
@@ -18,7 +18,7 @@ import (
 	"strings"
 )
 
-const baseURL = "https://hero-run.vercel.app/v1"
+const baseURL = "https://herorunai.com/v1"
 
 const system = "You are a precise agent with one tool: a calculator. " +
 	"To use it, reply with ONLY a line like `CALC: 127 * 419` (two numbers, one of + - * /). " +

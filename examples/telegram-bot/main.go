@@ -177,7 +177,7 @@ func (t *tg) sendPhoto(chat int64, data []byte, caption string) error {
 
 // ---------- bot ----------
 
-const help = `Hero Run — run 340+ AI models, paid in $HERO.
+const help = `Hero Run — run 500+ AI models, paid in $HERO.
 
 /models [text|image|audio]  list available models
 /ask [model] <prompt>       run a text model
@@ -190,7 +190,7 @@ Add an optional model id first, e.g.
   /ask openai/gpt-5 explain quantum tunneling
   /image google/gemini-3-pro-image a red fox`
 
-const selfHost = "This is a public demo, so paid tools are limited to protect a shared balance. Run your own Hero Run bot with your own token and $HERO key (no limits): https://hero-run.vercel.app/keys"
+const selfHost = "This is a public demo, so paid tools are limited to protect a shared balance. Run your own Hero Run bot with your own token and $HERO key (no limits): https://herorunai.com/keys"
 
 // demo mode caps paid usage on a public bot so its shared prepaid key can't be
 // drained. Counters are in-memory (reset on restart) — fine for a demo.

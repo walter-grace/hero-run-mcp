@@ -1,11 +1,11 @@
 # Hero Run Telegram bot (Go)
 
-A tiny Telegram bot that lets you run **340+ AI models** from a chat, paid in **$HERO**.
+A tiny Telegram bot that lets you run **500+ AI models** from a chat, paid in **$HERO**.
 
 It is also a working example of **consuming** the Hero Run MCP server: the bot spawns one of the MCP server implementations in this repo as a subprocess and talks JSON-RPC 2.0 over stdio, so every Telegram command becomes a real MCP `tools/call`. Zero external dependencies (stdlib `net/http` + `os/exec` + `encoding/json`).
 
 ```
-Telegram  ──long poll──▶  bot (this)  ──stdio JSON-RPC──▶  Hero Run MCP server  ──HTTPS──▶  hero-run.vercel.app
+Telegram  ──long poll──▶  bot (this)  ──stdio JSON-RPC──▶  Hero Run MCP server  ──HTTPS──▶  herorunai.com
 ```
 
 ## Commands
@@ -28,7 +28,7 @@ Plain text (no slash) is treated as `/ask`.
    ```bash
    (cd ../../go && go build -o hero-run-mcp .)
    ```
-3. **Mint a key** at [hero-run.vercel.app/keys](https://hero-run.vercel.app/keys) so paid tools (`/ask`, `/image`) work.
+3. **Mint a key** at [herorunai.com/keys](https://herorunai.com/keys) so paid tools (`/ask`, `/image`) work.
 4. **Start the bot:**
    ```bash
    export TELEGRAM_BOT_TOKEN=123456:ABC...

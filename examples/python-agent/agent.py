@@ -5,7 +5,7 @@ client: point base_url at /v1, use model "auto", and the router picks a
 right-sized model for every step, billed in $HERO from your prepaid key.
 
     pip install openai
-    export HERO_RUN_KEY=hr_live_...   # mint at https://hero-run.vercel.app/keys
+    export HERO_RUN_KEY=hr_live_...   # mint at https://herorunai.com/keys
     python agent.py "what is 127 * 419, and is it prime?"
 """
 
@@ -16,7 +16,7 @@ import sys
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="https://hero-run.vercel.app/v1",
+    base_url="https://herorunai.com/v1",
     api_key=os.environ["HERO_RUN_KEY"],
 )
 

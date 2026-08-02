@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Hero Run MCP server — Node reference implementation (stdio JSON-RPC).
-// Any MCP agent can run 340+ AI models paying $HERO per call. Key mode (prepaid
+// Any MCP agent can run 500+ AI models paying $HERO per call. Key mode (prepaid
 // credits) only; the API key is read from HERO_RUN_KEY, never hardcoded.
 import { createInterface } from "node:readline";
 
-const URL = process.env.HERO_RUN_URL || "https://hero-run.vercel.app";
+const URL = process.env.HERO_RUN_URL || "https://herorunai.com";
 const KEY = process.env.HERO_RUN_KEY || "";
 const TIMEOUT_MS = 300000; // 300s budget for a request, same as every other port
 const j = async (path, opt) => (await fetch(URL + path, { ...opt, signal: AbortSignal.timeout(TIMEOUT_MS) })).json();

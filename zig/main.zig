@@ -1,10 +1,10 @@
 // Hero Run MCP server — Zig implementation (stdio JSON-RPC).
-// Any MCP agent can run 340+ AI models paying $HERO per call. Key mode only; the
+// Any MCP agent can run 500+ AI models paying $HERO per call. Key mode only; the
 // API key is read from HERO_RUN_KEY, never hardcoded. Behavior matches node/index.mjs.
 const std = @import("std");
 const Value = std.json.Value;
 
-var URL: []const u8 = "https://hero-run.vercel.app";
+var URL: []const u8 = "https://herorunai.com";
 var KEY: []const u8 = "";
 var gio: std.Io = undefined;
 
