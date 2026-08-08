@@ -11,6 +11,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@e2b/code-interpreter": "^2.7.0",
     "viem": "^2.55.4"
   }
 }

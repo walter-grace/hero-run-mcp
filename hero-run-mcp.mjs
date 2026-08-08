@@ -58,12 +58,44 @@ async function agentKey() {
 }
 const memCache = new Map();
 
+// A swarm mints one agent per worker, so its size is a spend multiplier. Capped rather than
+// trusted: "parallelise this" is a prompt an agent will answer with a very large number.
+const SWARM_MAX = Number(process.env.HERO_SWARM_MAX || 8);
+
 // ---- Agent NFTs (mint / list) ----
 // Minting is what turns this from "talk to an agent" into "spin one up". Each agent is an NFT with
 // its own encrypted memory, so it is the unit of delegation: give a long-running job its own agent
 // and its context survives the session and is readable by any harness pointed at that id.
 const MEM_CONTRACT = process.env.HERO_MEM_ADDR || "0xce4dc968827a996f7bd5bbdb0fcb72348b18d0dc";
 const AGENT_ABI = [{ name: "mint", type: "function", stateMutability: "nonpayable", inputs: [{ name: "label", type: "string" }], outputs: [] }];
+
+/**
+ * Send a Robinhood Chain transaction with an explicitly re-read nonce.
+ *
+ * A swarm interleaves mint -> memory-append -> mint, and the append is ALSO a transaction from the
+ * same address, so any locally cached nonce is stale by one the moment it lands. viem's own cache
+ * hit exactly that: it sent 25 while the chain was already at 26, and the second worker died with
+ * "nonce too low" after the first had already been created.
+ *
+ * So read `pending` immediately before every send, and retry on a nonce race rather than surfacing
+ * it — RH's replicas lag, so a fresh read can still come back one behind.
+ */
+async function sendRh(wallet, account, data, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const nonce = await rhPub.getTransactionCount({ address: account.address, blockTag: "pending" });
+      const hash = await wallet.sendTransaction({ to: MEM_CONTRACT, data, nonce });
+      await rhPub.waitForTransactionReceipt({ hash });
+      return hash;
+    } catch (e) {
+      lastErr = e;
+      if (!/nonce/i.test(e?.message || "")) throw e;
+      await new Promise((r) => setTimeout(r, 600 * (i + 1))); // let the replica catch up
+    }
+  }
+  throw lastErr;
+}
 
 /** The wallet that signs on Robinhood Chain — the SAME one that owns memory, so ids line up. */
 async function rhSigner() {
@@ -408,11 +440,7 @@ const TOOLS = {
       if (!name) throw new Error("A label is required — it is how you will recognise this agent later.");
       const { wallet, account } = await rhSigner();
       const before = await ownedAgents(account.address);
-      const tx = await wallet.sendTransaction({
-        to: MEM_CONTRACT,
-        data: encodeFunctionData({ abi: AGENT_ABI, functionName: "mint", args: [name] }),
-      });
-      await rhPub.waitForTransactionReceipt({ hash: tx });
+      const tx = await sendRh(wallet, account, encodeFunctionData({ abi: AGENT_ABI, functionName: "mint", args: [name] }));
       // The mint event is the source of truth for the new id; diffing owned ids avoids depending on
       // a return value the contract does not actually give us through sendTransaction.
       const after = await ownedAgents(account.address);
@@ -437,6 +465,124 @@ const TOOLS = {
       return { text: `${account.address} owns ${ids.length} agent(s):\n${rows.join("\n")}` };
     },
   },
+  sandbox_run: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Run a shell command in a fresh, isolated cloud sandbox and return its output. Nothing touches the caller's machine, so it is safe for untrusted code, throwaway installs, or work a swarm worker needs to actually execute. Needs your own E2B_API_KEY (e2b.dev) — the sandbox is billed to that key, not to $HERO.",
+    inputSchema: {
+      type: "object", required: ["command"],
+      properties: {
+        command: { type: "string", description: "Shell command to run, e.g. \"python3 -c 'print(2**64)'\"." },
+        timeout_ms: { type: "number", description: "Kill the command after this long. Default 60000, max 300000." },
+      },
+    },
+    async run({ command, timeout_ms }) {
+      const cmd = String(command || "").trim();
+      if (!cmd) throw new Error("Nothing to run.");
+      // Deliberately the user's OWN E2B key, not ours. Compute is metered by the second and this
+      // tool is callable in a loop; billing it to $HERO without a meter would be exactly the
+      // sell-below-cost hole we just closed on inference. A $HERO-metered sandbox needs a billing
+      // design first, not a convenient default.
+      if (!process.env.E2B_API_KEY) {
+        throw new Error("Set E2B_API_KEY (free tier at e2b.dev) in this MCP server's environment. Sandbox compute bills to your own E2B account — Hero Run does not meter it yet.");
+      }
+      const ms = Math.min(Math.max(Number(timeout_ms) || 60_000, 1_000), 300_000);
+      let Sandbox;
+      try { ({ Sandbox } = await import("@e2b/code-interpreter")); }
+      catch { throw new Error("Sandboxes need the e2b SDK: npm i @e2b/code-interpreter in " + process.cwd()); }
+      const sbx = await Sandbox.create({ apiKey: process.env.E2B_API_KEY });
+      try {
+        // timeoutMs is passed explicitly: the SDK default is 60s and a longer command dies silently
+        // at the one-minute mark, which reads as the command failing rather than being cut off.
+        const r = await sbx.commands.run(cmd, { timeoutMs: ms });
+        const body = [r.stdout && `stdout:\n${r.stdout}`, r.stderr && `stderr:\n${r.stderr}`].filter(Boolean).join("\n\n");
+        return { text: `exit ${r.exitCode}\n\n${body || "(no output)"}` };
+      } finally {
+        await sbx.kill().catch(() => {}); // never leave a sandbox billing after the call returns
+      }
+    },
+  },
+  swarm_spawn: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Spin up a swarm: mint one agent per slice of work and seed each with its brief as an on-chain task:: entry. Returns the agent ids. Each worker owns its own durable memory, so a harness can drive them in parallel, walk away, and pick the results up later from any machine with swarm_collect. Costs a little RH gas per agent.",
+    inputSchema: {
+      type: "object", required: ["label", "slices"],
+      properties: {
+        label: { type: "string", description: "Swarm name, e.g. 'migrate-auth'. Workers are labelled <name>-0, <name>-1, …" },
+        slices: { type: "array", items: { type: "string" }, description: "One brief per worker. Each becomes that agent's task." },
+      },
+    },
+    async run({ label, slices }) {
+      const name = String(label || "").trim();
+      if (!name) throw new Error("A swarm label is required.");
+      const work = (Array.isArray(slices) ? slices : []).map((s) => String(s || "").trim()).filter(Boolean);
+      if (!work.length) throw new Error("Give at least one slice of work.");
+      // Bounded on purpose. Every worker is a real transaction and real gas, and an agent asked to
+      // "parallelise this" will happily request a hundred. A cap turns a bad prompt into a small
+      // bill instead of an incident.
+      if (work.length > SWARM_MAX) throw new Error(`At most ${SWARM_MAX} workers per swarm (asked for ${work.length}). Split the job or run a second swarm.`);
+      const { wallet, account } = await rhSigner();
+      const out = [];
+      let failed = null;
+      for (let i = 0; i < work.length && !failed; i++) {
+        try {
+          const before = await ownedAgents(account.address);
+          await sendRh(wallet, account, encodeFunctionData({ abi: AGENT_ABI, functionName: "mint", args: [`${name}-${i}`] }));
+          const after = await ownedAgents(account.address);
+          const id = after.find((x) => !before.includes(x)) ?? Math.max(...after);
+          const mem = await memory(id);
+          const seed = await mem.append([{ role: "system", text: `task::${JSON.stringify({ swarm: name, index: i, brief: work[i], at: new Date().toISOString() })}` }]);
+          await rhPub.waitForTransactionReceipt({ hash: seed }).catch(() => {}); // readable before we return
+
+          out.push({ id, brief: work[i] });
+        } catch (e) { failed = { index: i, message: e.message }; }
+      }
+      // Never throw away a partial swarm. Minting is irreversible and costs gas, so an agent created
+      // before the failure exists whether or not this call succeeds — reporting only the error would
+      // orphan it, leaving the caller paying for workers it does not know it has.
+      if (failed) {
+        const made = out.length
+          ? `Created ${out.length} worker(s) before failing: ${out.map((w) => "#" + w.id).join(", ")}. They are real and yours — reuse or ignore them, but they exist.\n\n`
+          : "No workers were created.\n\n";
+        throw new Error(`${made}Worker ${failed.index} failed: ${failed.message}`);
+      }
+      return {
+        text: `Swarm "${name}" spun up with ${out.length} worker(s):\n` +
+          out.map((w) => `  #${w.id} — ${w.brief.slice(0, 70)}${w.brief.length > 70 ? "…" : ""}`).join("\n") +
+          `\n\nDrive each with run_text, then have it record its answer via memory_write with text starting "handoff::".\n` +
+          `Collect everything later with swarm_collect agent_ids [${out.map((w) => w.id).join(", ")}].`,
+      };
+    },
+  },
+  swarm_collect: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "Read back a swarm: for each agent, its task:: brief and any handoff:: results it recorded. Use this to gather parallel work, or at the start of a session to recover a swarm you left running.",
+    inputSchema: {
+      type: "object", required: ["agent_ids"],
+      properties: { agent_ids: { type: "array", items: { type: "number" }, description: "The ids swarm_spawn returned." } },
+    },
+    async run({ agent_ids }) {
+      const ids = (Array.isArray(agent_ids) ? agent_ids : []).map(Number).filter(Number.isInteger);
+      if (!ids.length) throw new Error("Pass the agent ids to collect.");
+      const parts = [];
+      let pending = 0;
+      for (const id of ids) {
+        try {
+          const entries = await (await memory(id)).raw();
+          const task = entries.filter((e) => e.text?.startsWith("task::")).pop();
+          const results = entries.filter((e) => e.text?.startsWith("handoff::"));
+          let brief = "";
+          try { brief = JSON.parse(task.text.slice(6)).brief; } catch { brief = task?.text?.slice(6) || "(no task recorded)"; }
+          if (!results.length) pending++;
+          parts.push(`#${id} — ${brief}\n` + (results.length
+            ? results.map((r) => "   ✓ " + r.text.slice(9)).join("\n")
+            : "   … no handoff:: recorded yet"));
+        } catch (e) { parts.push(`#${id} — unreadable (${e.message})`); }
+      }
+      // Say plainly how much is still outstanding. A partial collection that reads as complete is
+      // how a caller ends up summarising half a swarm as if it were the whole answer.
+      return { text: `${ids.length} worker(s), ${pending} still without a result:\n\n${parts.join("\n\n")}` };
+    },
+  },
   memory_write: {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: "Mint a memory: encrypt a note and write it as a checkpoint on Robinhood Chain, owned by your agent NFT. This is what makes a coding session durable — anything written here survives the session and is readable by every other harness pointed at the same agent. Costs a little RH gas (~$0.003). Needs AGENT_PRIVATE_KEY and HERO_AGENT_ID.",
@@ -452,6 +598,24 @@ const TOOLS = {
       if (!String(text || "").trim()) throw new Error("Nothing to remember — 'text' is empty.");
       const mem = await memory(agent_id);
       const hash = await mem.append([{ role, text: String(text) }]);
+      // append() returns as soon as the tx is broadcast, and waiting for the RECEIPT is still not
+      // enough: RH's read replicas lag behind inclusion, so a read issued straight afterwards misses
+      // the checkpoint. Measured twice — swarm_collect reported "no result recorded" for a write
+      // that had already landed, first without the receipt wait and again with it. A caller acting
+      // on that redoes the work or concludes the memory was lost.
+      //
+      // So confirm by READING IT BACK, which is the only check that matches what the next caller
+      // will actually do. Bounded, and honest when it does not converge: a slow read is not a
+      // failed write, and claiming either one wrongly is worse than saying which happened.
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      let visible = false;
+      for (let i = 0; i < 8 && !visible; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        visible = (await mem.raw().catch(() => [])).some((e) => e.text === String(text));
+      }
+      if (!visible) {
+        return { text: `Memory written and confirmed on chain (agent ${agent_id ?? AGENT_ID}), but the read replica has not caught up yet.\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n\nThe write is safe — do NOT retry it. It will appear in memory_read shortly.` };
+      }
       return { text: `Memory minted on Robinhood Chain (agent ${agent_id ?? AGENT_ID}).\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n\nEncrypted with your wallet's key before it left this machine — on-chain observers see random bytes.` };
     },
   },
