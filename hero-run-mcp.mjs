@@ -8,7 +8,7 @@
 //
 // Without AGENT_PRIVATE_KEY, read-only tools (list_models, treasury_stats) still work.
 import { createInterface } from "node:readline";
-import { createWalletClient, createPublicClient, http, parseUnits, pad } from "viem";
+import { createWalletClient, createPublicClient, http, parseUnits, pad, encodeFunctionData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base } from "viem/chains";
 
@@ -57,6 +57,53 @@ async function agentKey() {
   return null;
 }
 const memCache = new Map();
+
+// ---- Agent NFTs (mint / list) ----
+// Minting is what turns this from "talk to an agent" into "spin one up". Each agent is an NFT with
+// its own encrypted memory, so it is the unit of delegation: give a long-running job its own agent
+// and its context survives the session and is readable by any harness pointed at that id.
+const MEM_CONTRACT = process.env.HERO_MEM_ADDR || "0xce4dc968827a996f7bd5bbdb0fcb72348b18d0dc";
+const AGENT_ABI = [{ name: "mint", type: "function", stateMutability: "nonpayable", inputs: [{ name: "label", type: "string" }], outputs: [] }];
+
+/** The wallet that signs on Robinhood Chain — the SAME one that owns memory, so ids line up. */
+async function rhSigner() {
+  const pk = await agentKey();
+  if (!pk) throw new Error("Needs the agent wallet — set HERO_AGENT_KEY_FILE (preferred) or AGENT_PRIVATE_KEY.");
+  const acct = privateKeyToAccount(pk);
+  return { account: acct, wallet: createWalletClient({ account: acct, chain: rhChain, transport: http(RH_RPC) }) };
+}
+
+/**
+ * Agent ids owned by an address.
+ *
+ * NOT via eth_getLogs. Robinhood Chain caps the block range, so `fromBlock: 0x0` does not error —
+ * it comes back EMPTY, and the caller reads that as "you own no agents" while happily minting a
+ * duplicate. That exact failure has bitten this codebase before.
+ *
+ * So walk the supply instead: nextId() is the upper bound and ownerOf() is authoritative. Bounded,
+ * range-limit-proof, and it also catches agents transferred in rather than minted by this wallet.
+ */
+async function ownedAgents(address) {
+  const want = address.toLowerCase();
+  const nextHex = await rhPub.call({ to: MEM_CONTRACT, data: "0x61b8ce8c" }).catch(() => null);
+  const total = nextHex?.data ? Number(BigInt(nextHex.data)) - 1 : 0;
+  if (total <= 0) return [];
+  const ids = [];
+  // Small, sequential supply — check every id. Concurrency-limited so a scan cannot hammer the RPC
+  // into the rate limiting that caused the original "no agents" bug.
+  for (let start = 1; start <= total; start += 10) {
+    const batch = [];
+    for (let id = start; id < Math.min(start + 10, total + 1); id++) {
+      batch.push(
+        rhPub.call({ to: MEM_CONTRACT, data: "0x6352211e" + BigInt(id).toString(16).padStart(64, "0") })
+          .then((r) => (r?.data && "0x" + r.data.slice(-40) === want ? id : null))
+          .catch(() => null),
+      );
+    }
+    ids.push(...(await Promise.all(batch)).filter((x) => x !== null));
+  }
+  return ids;
+}
 
 async function memory(agentId) {
   const id = String(agentId ?? AGENT_ID ?? "").trim();
@@ -347,6 +394,47 @@ const TOOLS = {
     async run() {
       const t = await (await fetch(`${URL}/api/treasury`)).json();
       return { text: `Treasury ${t.treasury} · ${t.share} creator share\nClaimable: ${t.claimable?.token0} WETH + ${t.claimable?.token1} HERO` };
+    },
+  },
+  agent_mint: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Spin up a NEW agent: mints an agent NFT on Robinhood Chain that you own, with its own encrypted memory. This is the unit of delegation — give each long-running job its own agent and it keeps its own durable context, readable by any harness you point at that id. Costs a little RH gas. Needs the agent wallet (HERO_AGENT_KEY_FILE or AGENT_PRIVATE_KEY).",
+    inputSchema: {
+      type: "object", required: ["label"],
+      properties: { label: { type: "string", description: "Short name for the agent, e.g. 'refactor-auth' or 'nightly-triage'." } },
+    },
+    async run({ label }) {
+      const name = String(label || "").trim();
+      if (!name) throw new Error("A label is required — it is how you will recognise this agent later.");
+      const { wallet, account } = await rhSigner();
+      const before = await ownedAgents(account.address);
+      const tx = await wallet.sendTransaction({
+        to: MEM_CONTRACT,
+        data: encodeFunctionData({ abi: AGENT_ABI, functionName: "mint", args: [name] }),
+      });
+      await rhPub.waitForTransactionReceipt({ hash: tx });
+      // The mint event is the source of truth for the new id; diffing owned ids avoids depending on
+      // a return value the contract does not actually give us through sendTransaction.
+      const after = await ownedAgents(account.address);
+      const id = after.find((x) => !before.includes(x)) ?? (after.length ? Math.max(...after) : null);
+      return { text: `Agent #${id} "${name}" minted on Robinhood Chain, owned by ${account.address}.\nhttps://robinhoodchain.blockscout.com/tx/${tx}\n\nUse it: memory_write / memory_read with agent_id ${id}, or set HERO_AGENT_ID=${id}.` };
+    },
+  },
+  agent_list: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "List the agents your wallet owns, with how many memory checkpoints each holds. Use this to find an existing agent before minting another.",
+    inputSchema: { type: "object", properties: {} },
+    async run() {
+      const { account } = await rhSigner();
+      const ids = await ownedAgents(account.address);
+      if (!ids.length) return { text: `${account.address} owns no agents yet. Mint one with agent_mint.` };
+      const rows = await Promise.all(ids.map(async (id) => {
+        const head = await rhPub.call({ to: MEM_CONTRACT, data: "0x5ad8a111" + BigInt(id).toString(16).padStart(64, "0") }).catch(() => null);
+        const hex = (head?.data || "").replace(/^0x/, "").padEnd(256, "0");
+        const cps = hex ? Number(BigInt("0x" + hex.slice(64, 128))) : 0;
+        return `  #${id} — ${cps} checkpoint${cps === 1 ? "" : "s"}`;
+      }));
+      return { text: `${account.address} owns ${ids.length} agent(s):\n${rows.join("\n")}` };
     },
   },
   memory_write: {
