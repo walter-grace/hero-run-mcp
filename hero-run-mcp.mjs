@@ -545,11 +545,31 @@ const TOOLS = {
           : "No workers were created.\n\n";
         throw new Error(`${made}Worker ${failed.index} failed: ${failed.message}`);
       }
+      // Tell the shared worker about the swarm so the workers run THEMSELVES. Chain discovery from
+      // the worker was tried first and hung on RH's rate limits; the registry is one subrequest.
+      // Registration failing is not a failed spawn — the agents exist and can be driven by hand —
+      // but it must be SAID, or the caller waits forever for a cron that does not know about them.
+      let autonomy = "";
+      if (RUNKEY) {
+        try {
+          const rr = await fetch(`${URL}/api/swarm/register`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNKEY}` },
+            body: JSON.stringify({ label: name, agentIds: out.map((w) => w.id) }),
+          });
+          const rd = await rr.json().catch(() => ({}));
+          autonomy = rr.ok
+            ? `\nRegistered as "${rd.swarmId}" — the cloud worker will execute each task within ~5 minutes. Just swarm_collect later.`
+            : `\n⚠ Could not register for autonomous execution (${rd.error || rr.status}). Drive the workers with run_text, or re-register later.`;
+        } catch (e) { autonomy = `\n⚠ Could not register for autonomous execution (${e.message}). Drive the workers with run_text.`; }
+      } else {
+        autonomy = "\n⚠ No HERO_RUN_KEY set, so the swarm was not registered for autonomous execution.";
+      }
       return {
         text: `Swarm "${name}" spun up with ${out.length} worker(s):\n` +
           out.map((w) => `  #${w.id} — ${w.brief.slice(0, 70)}${w.brief.length > 70 ? "…" : ""}`).join("\n") +
-          `\n\nDrive each with run_text, then have it record its answer via memory_write with text starting "handoff::".\n` +
-          `Collect everything later with swarm_collect agent_ids [${out.map((w) => w.id).join(", ")}].`,
+          autonomy +
+          `\n\nCollect results with swarm_collect agent_ids [${out.map((w) => w.id).join(", ")}].`,
       };
     },
   },
