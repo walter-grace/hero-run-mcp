@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "hero-run": {
+      "command": "node",
+      "args": ["./hero-run-mcp.mjs"],
+      "env": {
+        "HERO_RUN_URL": "https://herorunai.com",
+        "HERO_RUN_KEY": "${HERO_RUN_KEY}",
+        "HERO_AGENT_KEY_FILE": "${HERO_AGENT_KEY_FILE}",
+        "HERO_AGENT_ID": "${HERO_AGENT_ID}"
+      }
+    }
+  }
+}
