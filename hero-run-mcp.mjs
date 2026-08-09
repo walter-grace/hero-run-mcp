@@ -826,6 +826,24 @@ const TOOLS = {
       return { text: `Progress recorded on ${workflow} step ${step + 1} (${status}). Any session can now workflow_get "${workflow}" and see it.` };
     },
   },
+  agent_approve: {
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    description: "MULTIPLAYER: grant (or revoke) another wallet write access to ALL your agents' memory, via the standard ERC-721 setApprovalForAll on the AgentMemory NFT. After approval, that wallet — on any machine, any network, any harness or LLM — can checkpoint your agents: send messages, add public entries, feed the shared memory. Revoke any time with approved:false. Owner-signed, costs gas. NOTE: approval covers every agent this wallet owns, and an approved wallet can write but can never read your encrypted entries (they cannot derive your key) — use public entries for shared rooms.",
+    inputSchema: {
+      type: "object", required: ["wallet"],
+      properties: {
+        wallet: { type: "string", description: "The wallet address to approve (a teammate's)." },
+        approved: { type: "boolean", description: "true to grant, false to revoke. Default true." },
+      },
+    },
+    async run({ wallet: operator, approved = true }) {
+      if (!/^0x[0-9a-fA-F]{40}$/.test(operator || "")) throw new Error("A valid 0x wallet address is required.");
+      const { wallet, account } = await rhSigner();
+      const data = "0xa22cb465" + operator.slice(2).toLowerCase().padStart(64, "0") + (approved ? "1" : "0").padStart(64, "0");
+      const hash = await sendRh(wallet, account, data);
+      return { text: `${approved ? "Approved" : "Revoked"}: ${operator} ${approved ? "can now write to" : "can no longer write to"} every agent owned by ${account.address}.\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n${approved ? "They can msg_send / write public entries to your agents from their own wallet, any machine, any harness." : ""}` };
+    },
+  },
   msg_send: {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: "Send a message from one agent to another's inbox — the wallet-native alternative to an SSH tunnel. Writes a msg:: entry onto the RECIPIENT agent's on-chain memory, so delivery is async (the recipient need not be online), machine-independent (any machine with the recipient's key reads it), and permanent. Same wallet: works now. Cross-wallet: the recipient owner must first approve this wallet on the AgentMemory NFT (setApprovalForAll), and the message is readable by whoever holds the recipient's key.",
@@ -835,18 +853,19 @@ const TOOLS = {
         to_agent: { type: "string", description: "Recipient agent id (the inbox)." },
         text: { type: "string" },
         from_agent: { type: "string", description: "Sender agent id, for the record. Defaults to HERO_AGENT_ID." },
+        public: { type: "boolean", description: "Write the message UNENCRYPTED (marker-0) so members on OTHER wallets can read it. REQUIRED for cross-wallet rooms: an encrypted message uses the sender's key, which a different-wallet recipient can never derive. Default false (same-wallet private)." },
       },
     },
-    async run({ to_agent, text, from_agent }) {
+    async run({ to_agent, text, from_agent, public: pub = false }) {
       if (!String(text || "").trim()) throw new Error("Empty message.");
       const from = from_agent ?? AGENT_ID;
-      // Written to the RECIPIENT's chain. OnchainMemory encrypts with this wallet's key, so within one
-      // wallet every agent shares the key and reads it; cross-wallet needs approval + (for secrecy) a
-      // recipient-pubkey channel — see the description.
+      // Same-wallet: encrypted (both sides share the owner key). Cross-wallet: MUST be public —
+      // encryption here uses the SENDER's key, which a different-wallet recipient can never derive.
       const mem = await memory(to_agent);
-      const hash = await mem.append([{ role: "agent", text: "msg::" + JSON.stringify({ from: String(from), to: String(to_agent), text: String(text), at: new Date().toISOString() }) }]);
+      const entry = { role: "agent", text: "msg::" + JSON.stringify({ from: String(from), to: String(to_agent), text: String(text), at: new Date().toISOString() }) };
+      const hash = pub ? await mem.appendPublic([entry]) : await mem.append([entry]);
       await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
-      return { text: `Message delivered to agent ${to_agent}'s inbox (from ${from}).\nhttps://robinhoodchain.blockscout.com/tx/${hash}\nThe recipient reads it with inbox_read agent_id ${to_agent}.` };
+      return { text: `${pub ? "PUBLIC message" : "Message"} delivered to agent ${to_agent}'s inbox (from ${from}).\nhttps://robinhoodchain.blockscout.com/tx/${hash}\nThe recipient reads it with inbox_read agent_id ${to_agent}.` };
     },
   },
   inbox_read: {
@@ -873,12 +892,13 @@ const TOOLS = {
         text: { type: "string", description: "What to remember. Write the durable fact, not the conversation." },
         role: { type: "string", enum: ["user", "agent", "system"], description: "Who this came from. Defaults to agent." },
         agent_id: { type: "string", description: "Agent NFT id. Defaults to HERO_AGENT_ID." },
+        public: { type: "boolean", description: "Write UNENCRYPTED (marker-0): world-readable, the shared channel for approved wallets on other networks. Default false (encrypted, owner-only)." },
       },
     },
-    async run({ text, role = "agent", agent_id }) {
+    async run({ text, role = "agent", agent_id, public: pub = false }) {
       if (!String(text || "").trim()) throw new Error("Nothing to remember — 'text' is empty.");
       const mem = await memory(agent_id);
-      const hash = await mem.append([{ role, text: String(text) }]);
+      const hash = pub ? await mem.appendPublic([{ role, text: String(text) }]) : await mem.append([{ role, text: String(text) }]);
       // append() returns as soon as the tx is broadcast, and waiting for the RECEIPT is still not
       // enough: RH's read replicas lag behind inclusion, so a read issued straight afterwards misses
       // the checkpoint. Measured twice — swarm_collect reported "no result recorded" for a write

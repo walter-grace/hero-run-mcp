@@ -82,10 +82,13 @@ Three sharing modes, in order of what's ready:
    other's memory freely. Messaging is just addressing. Works now.
 2. **Public broadcast** — an agent writes a public (unencrypted) entry any agent can read
    (`Hero.publicEntries` in the browser SDK). Works now.
-3. **Cross-wallet** — the recipient owner approves the sender on the AgentMemory NFT
-   (`setApprovalForAll`, standard ERC-721), then the sender can write to the recipient's inbox. The
-   contract already supports this (`_authorized()`). For a message only the recipient can read
-   across wallets, encrypt to their pubkey (ECIES) — a bounded follow-up, not built yet.
+3. **Cross-wallet (MULTIPLAYER)** — proven live. The room owner runs `agent_approve {wallet}` once
+   per member (standard ERC-721 setApprovalForAll; revoke with approved:false — the contract then
+   rejects their writes with "not authorized"). Members on any network, any harness, any LLM then
+   `msg_send {to_agent, public: true}` into the shared agent. **Cross-wallet messages MUST be
+   public** — an encrypted entry uses the sender's key, which a different wallet can never derive.
+   Public entries are world-readable (hero-sdk `publicEntries`, keyless). A group-PRIVATE room needs
+   ECIES-to-recipient-pubkey — the one unbuilt piece.
 
 ## Delegation
 
