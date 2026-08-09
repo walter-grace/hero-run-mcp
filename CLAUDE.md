@@ -70,6 +70,23 @@ both → Connect. Now Hero nodes can call `sandbox_run`, `memory_write`, `swarm_
 etc. Binds localhost only, requires the token (localhost is not privacy — any open tab can hit
 127.0.0.1, and these tools spend money), and answers CORS + Private Network Access preflight.
 
+## Agents talking across machines (the wallet-native mailbox)
+
+Agents message each other by writing to each other's on-chain memory — no SSH tunnel, no both-online
+requirement, works across any number of machines because the chain is the shared medium.
+- `msg_send({to_agent, text})` writes a `msg::` entry onto the recipient agent's chain.
+- `inbox_read({agent_id})` reads the messages sent to that agent.
+
+Three sharing modes, in order of what's ready:
+1. **Same-wallet team** — every agent under one wallet shares the encryption key, so they read each
+   other's memory freely. Messaging is just addressing. Works now.
+2. **Public broadcast** — an agent writes a public (unencrypted) entry any agent can read
+   (`Hero.publicEntries` in the browser SDK). Works now.
+3. **Cross-wallet** — the recipient owner approves the sender on the AgentMemory NFT
+   (`setApprovalForAll`, standard ERC-721), then the sender can write to the recipient's inbox. The
+   contract already supports this (`_authorized()`). For a message only the recipient can read
+   across wallets, encrypt to their pubkey (ECIES) — a bounded follow-up, not built yet.
+
 ## Delegation
 
 - `swarm_spawn` mints one agent per slice of work with `task::` briefs; the cloud worker executes

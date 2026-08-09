@@ -818,6 +818,44 @@ const TOOLS = {
       return { text: `Progress recorded on ${workflow} step ${step + 1} (${status}). Any session can now workflow_get "${workflow}" and see it.` };
     },
   },
+  msg_send: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Send a message from one agent to another's inbox — the wallet-native alternative to an SSH tunnel. Writes a msg:: entry onto the RECIPIENT agent's on-chain memory, so delivery is async (the recipient need not be online), machine-independent (any machine with the recipient's key reads it), and permanent. Same wallet: works now. Cross-wallet: the recipient owner must first approve this wallet on the AgentMemory NFT (setApprovalForAll), and the message is readable by whoever holds the recipient's key.",
+    inputSchema: {
+      type: "object", required: ["to_agent", "text"],
+      properties: {
+        to_agent: { type: "string", description: "Recipient agent id (the inbox)." },
+        text: { type: "string" },
+        from_agent: { type: "string", description: "Sender agent id, for the record. Defaults to HERO_AGENT_ID." },
+      },
+    },
+    async run({ to_agent, text, from_agent }) {
+      if (!String(text || "").trim()) throw new Error("Empty message.");
+      const from = from_agent ?? AGENT_ID;
+      // Written to the RECIPIENT's chain. OnchainMemory encrypts with this wallet's key, so within one
+      // wallet every agent shares the key and reads it; cross-wallet needs approval + (for secrecy) a
+      // recipient-pubkey channel — see the description.
+      const mem = await memory(to_agent);
+      const hash = await mem.append([{ role: "agent", text: "msg::" + JSON.stringify({ from: String(from), to: String(to_agent), text: String(text), at: new Date().toISOString() }) }]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      return { text: `Message delivered to agent ${to_agent}'s inbox (from ${from}).\nhttps://robinhoodchain.blockscout.com/tx/${hash}\nThe recipient reads it with inbox_read agent_id ${to_agent}.` };
+    },
+  },
+  inbox_read: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "Read an agent's inbox: the messages other agents have sent it (msg:: entries), newest last. This is how an agent sees what other agents/wallets are saying to it.",
+    inputSchema: {
+      type: "object",
+      properties: { agent_id: { type: "string", description: "The inbox to read. Defaults to HERO_AGENT_ID." }, limit: { type: "number", description: "Default 20." } },
+    },
+    async run({ agent_id, limit = 20 }) {
+      const entries = await (await memory(agent_id)).raw();
+      const msgs = entries.filter((e) => String(e.text || "").startsWith("msg::")).map((e) => { try { return JSON.parse(e.text.slice(5)); } catch { return null; } }).filter(Boolean);
+      if (!msgs.length) return { text: `Inbox empty for agent ${agent_id ?? AGENT_ID}.` };
+      const rows = msgs.slice(-Math.max(1, Math.min(100, limit))).map((m) => `  from #${m.from} · ${m.at?.slice(0, 16) || ""}\n    ${m.text.slice(0, 300)}`);
+      return { text: `${msgs.length} message(s) in agent ${agent_id ?? AGENT_ID}'s inbox:\n${rows.join("\n")}` };
+    },
+  },
   memory_write: {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: "Mint a memory: encrypt a note and write it as a checkpoint on Robinhood Chain, owned by your agent NFT. This is what makes a coding session durable — anything written here survives the session and is readable by every other harness pointed at the same agent. Costs a little RH gas (~$0.003). Needs AGENT_PRIVATE_KEY and HERO_AGENT_ID.",
