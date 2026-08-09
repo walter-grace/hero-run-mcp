@@ -591,25 +591,33 @@ const TOOLS = {
       for (const id of ids) {
         try {
           const entries = await (await memory(id)).raw();
-          const task = entries.filter((e) => e.text?.startsWith("task::")).pop();
-          const results = entries.filter((e) => e.text?.startsWith("handoff::"));
-          let brief = "";
-          try { brief = JSON.parse(task.text.slice(6)).brief; } catch { brief = task?.text?.slice(6) || "(no task recorded)"; }
-          if (!results.length) pending++;
-          parts.push(`#${id} — ${brief}\n` + (results.length
-            ? results.map((r) => {
-                // Handoffs come in two shapes: JSON {text, spentHero, failed} (workers that report
-                // cost) and the legacy bare string. Read both, show cost when it is known.
-                const raw = r.text.slice(9);
-                try { const j = JSON.parse(raw); return `   ${j.failed ? "✗" : "✓"} ${j.text}${Number.isFinite(j.spentHero) ? ` (${j.spentHero.toLocaleString()} $HERO)` : ""}`; }
-                catch { return "   ✓ " + raw; }
-              }).join("\n")
-            : "   … no handoff:: recorded yet"));
+          // Multi-task agents (Council broadcast pools several task:: on one agent) pair each task
+          // to its handoff by taskIndex; legacy single-task agents have an unindexed handoff that
+          // closes index 0. Same derivation the worker's swarm lane uses, so they cannot disagree.
+          const tasks = [];
+          for (const e of entries) {
+            if (!e.text?.startsWith("task::")) continue;
+            let t; try { t = JSON.parse(e.text.slice(6)); } catch { t = { brief: e.text.slice(6) }; }
+            tasks.push({ index: Number.isInteger(t.index) ? t.index : tasks.length, brief: t.brief || "" });
+          }
+          const byIdx = new Map();
+          for (const e of entries) {
+            if (!e.text?.startsWith("handoff::")) continue;
+            let h; try { h = JSON.parse(e.text.slice(9)); } catch { h = { text: e.text.slice(9) }; }
+            byIdx.set(Number.isInteger(h.taskIndex) ? h.taskIndex : 0, h);
+          }
+          if (!tasks.length) { parts.push(`#${id} — no tasks`); continue; }
+          const lines = tasks.sort((a, b) => a.index - b.index).map((t) => {
+            const h = byIdx.get(t.index);
+            if (!h) { pending++; return `   … ${t.index + 1}. ${t.brief.slice(0, 80)} — no handoff yet`; }
+            return `   ${h.failed ? "✗" : "✓"} ${t.index + 1}. ${t.brief.slice(0, 60)}\n      ${String(h.text || "").slice(0, 240)}${Number.isFinite(h.spentHero) ? ` (${h.spentHero.toLocaleString()} $HERO)` : ""}`;
+          });
+          parts.push(`#${id} — ${tasks.length} task(s):\n` + lines.join("\n"));
         } catch (e) { parts.push(`#${id} — unreadable (${e.message})`); }
       }
       // Say plainly how much is still outstanding. A partial collection that reads as complete is
       // how a caller ends up summarising half a swarm as if it were the whole answer.
-      return { text: `${ids.length} worker(s), ${pending} still without a result:\n\n${parts.join("\n\n")}` };
+      return { text: `${ids.length} agent(s), ${pending} task(s) still open:\n\n${parts.join("\n\n")}` };
     },
   },
   file_save: {
