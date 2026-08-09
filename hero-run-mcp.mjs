@@ -668,12 +668,19 @@ const TOOLS = {
     async run({ ref, out, agent_id }) {
       let files;
       try { files = await import(`${HERO_AGENT_PATH}/src/files.mjs`); } catch { throw new Error("file store unavailable — set HERO_AGENT_PATH"); }
-      const f = files.extractFile(await (await memory(agent_id)).raw(), ref);
+      const entries = await (await memory(agent_id)).raw();
+      // extractFile matches full sha256 or exact name; resolve a prefix to the full hash first so
+      // the "recover with the first 12 chars" promise in file_save's output actually holds.
+      let key = ref;
+      if (/^[0-9a-f]{6,63}$/i.test(ref)) {
+        const hit = [...files.parseFiles(entries).keys()].find((h) => h.startsWith(ref.toLowerCase()));
+        if (hit) key = hit;
+      }
+      const f = files.extractFile(entries, key);
       if (!f) throw new Error(`No file matching "${ref}" on agent ${agent_id ?? AGENT_ID}. See file_list.`);
-      if (f.uri) return { text: `"${f.name}" is a pointer: bytes live at ${f.uri} (sha256 ${f.sha256.slice(0, 16)}… verifies them).` };
-      const buf = Buffer.from(f.b64, "base64");
-      const okHash = files.sha256hex(buf) === f.sha256;
-      if (!okHash) throw new Error(`Hash mismatch recovering "${f.name}" — refusing to return tampered bytes.`);
+      if (f.external) return { text: `"${f.name}" is a pointer: bytes live at ${f.uri} (sha256 ${f.sha256.slice(0, 16)}… verifies them).` };
+      const buf = f.buf; // extractFile returns decoded bytes with its own verification verdict
+      if (f.verified === false) throw new Error(`Hash mismatch recovering "${f.name}" — refusing to return tampered bytes.`);
       if (out) { const { writeFile } = await import("node:fs/promises"); await writeFile(out, buf); return { text: `"${f.name}" (${(buf.length / 1024).toFixed(1)}KB) recovered, hash-verified, written to ${out}.` }; }
       const text = buf.toString("utf8");
       return { text: `"${f.name}" (${(buf.length / 1024).toFixed(1)}KB, hash-verified):\n\n${text.slice(0, 4000)}${text.length > 4000 ? "\n… (truncated for display; use out to write the full file)" : ""}` };
