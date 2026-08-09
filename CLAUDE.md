@@ -2,7 +2,7 @@
 
 You are working in the Hero Run MCP repo. Every session here follows the **on-chain reasoning
 protocol**: your work is real, and so is the trace you leave. The `hero-run` MCP server (loaded from
-`.mcp.json`) gives you 19 tools — inference paid in $HERO, on-chain agent memory, swarms, sandboxes.
+`.mcp.json`) gives you 36 tools — inference paid in $HERO, on-chain agent memory, swarms, sandboxes.
 
 ## The standing practice: mint your reasoning as you work
 
@@ -58,7 +58,7 @@ bills your Firecrawl account, `HERO_RUN_KEY` pays inference in $HERO, the wallet
 ## Reaching these tools from the Studio canvas (HTTP bridge)
 
 The stdio server is for CLI harnesses (Claude Code, OpenCode) and is unreachable from a browser.
-To use these tools from the Studio graph's Plugins menu, run the HTTP bridge — same 22 tools, same
+To use these tools from the Studio graph's Plugins menu, run the HTTP bridge — same 36 tools, same
 implementation, served over MCP Streamable HTTP:
 
 ```
@@ -87,8 +87,17 @@ Three sharing modes, in order of what's ready:
    rejects their writes with "not authorized"). Members on any network, any harness, any LLM then
    `msg_send {to_agent, public: true}` into the shared agent. **Cross-wallet messages MUST be
    public** — an encrypted entry uses the sender's key, which a different wallet can never derive.
-   Public entries are world-readable (hero-sdk `publicEntries`, keyless). A group-PRIVATE room needs
-   ECIES-to-recipient-pubkey — the one unbuilt piece.
+   Public entries are world-readable (hero-sdk `publicEntries`, keyless).
+4. **Group-private rooms (ECIES)** — proven live on agent #25. Shared among members, sealed to
+   everyone else including non-member wallets. The room key never leaves the chain unwrapped: it
+   exists only as `roomkey::` entries, each ECIES-wrapped (secp256k1 ECDH + AES-GCM) to one member's
+   public key. Flow: owner `room_create` (generates key, wraps to self) → owner `agent_approve`
+   each member → member `room_join` (publishes their `pubkey::` — an address is a hash and cannot
+   receive a wrap) → owner `room_invite {wallet}` (unwraps own key, re-wraps to them) → anyone with
+   a wrap `room_write` / `room_read`. Non-members hit "No room key wrapped to you"; keyless readers
+   see the wraps and skip the sealed marker-3 blobs. To exclude someone: revoke approval AND
+   `room_create` again to rotate — entries they could already read stay readable to them; that is
+   how encryption works, not a bug.
 
 ## Delegation
 

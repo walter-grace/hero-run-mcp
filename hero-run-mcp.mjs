@@ -137,6 +137,26 @@ async function ownedAgents(address) {
   return ids;
 }
 
+// Room membership resolved from the chain: find MY roomkey:: wrap on the agent, unwrap it with my
+// wallet key, and hand back an OnchainMemory that can open and write marker-3 (room) blobs. A wallet
+// without a wrap fails here with a message that says so — not a decrypt error three layers down.
+async function roomMemory(agentId) {
+  const roomLib = await import(`${HERO_AGENT_PATH}/src/memory/room.mjs`);
+  const pk = await agentKey();
+  if (!pk) throw new Error("Room access needs the wallet key (HERO_AGENT_KEY_FILE).");
+  const { privateKeyToAccount: toAcct } = await import("viem/accounts");
+  const me = toAcct(pk).address.toLowerCase();
+  const plain = await memory(agentId);
+  const wraps = (await plain.raw()).filter((e) => e.text?.startsWith(roomLib.ROOMKEY_MARK))
+    .map((e) => { try { return JSON.parse(e.text.slice(roomLib.ROOMKEY_MARK.length)); } catch { return null; } })
+    .filter(Boolean).reverse();
+  const mine = wraps.find((x) => x.to === me);
+  if (!mine) throw new Error(`No room key wrapped to ${me} on agent ${agentId}. room_join, then ask the owner to room_invite you.`);
+  const roomKey = roomLib.unwrapKey(pk, mine);
+  const { OnchainMemory } = await import(`${HERO_AGENT_PATH}/src/memory/onchain.mjs`);
+  return { mem: new OnchainMemory({ agentId: Number(agentId), privateKey: pk, roomKey }), me };
+}
+
 async function memory(agentId) {
   const id = String(agentId ?? AGENT_ID ?? "").trim();
   if (!id) throw new Error("Set HERO_AGENT_ID (or pass agent_id). Mint an agent at https://herorunai.com/agent.");
@@ -824,6 +844,88 @@ const TOOLS = {
       const hash = await mem.append([{ role: "agent", text: "wfstep::" + JSON.stringify(entry) }]);
       await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
       return { text: `Progress recorded on ${workflow} step ${step + 1} (${status}). Any session can now workflow_get "${workflow}" and see it.` };
+    },
+  },
+  room_create: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Create a GROUP-PRIVATE room on an agent: entries encrypted with a shared room key that only members hold — hidden from the world AND from non-member wallets, unlike public entries. Generates the key and posts it on-chain wrapped to YOUR public key (ECIES), so the chain itself carries the key material. Then room_invite members (they must room_join first) and everyone room_write/room_read. Owner-run.",
+    inputSchema: { type: "object", properties: { agent_id: { type: "string", description: "The room agent. Defaults to HERO_AGENT_ID." } } },
+    async run({ agent_id }) {
+      const room = await import(`${HERO_AGENT_PATH}/src/memory/room.mjs`);
+      const pk = await agentKey();
+      const { privateKeyToAccount: toAcct } = await import("viem/accounts");
+      const me = toAcct(pk).address;
+      const roomKey = room.makeRoomKey();
+      const wrap = room.wrapKey(room.pubkeyOf(pk), roomKey);
+      const mem = await memory(agent_id);
+      const hash = await mem.appendPublic([{ role: "system", text: room.ROOMKEY_MARK + JSON.stringify({ to: me.toLowerCase(), ...wrap, at: new Date().toISOString() }) }]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      return { text: `Room created on agent ${agent_id ?? AGENT_ID}. The room key exists ONLY as on-chain wraps — yours is posted.\nNext: members run room_join (needs agent_approve first), then you room_invite each.` };
+    },
+  },
+  room_join: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "Join a room as a MEMBER: publish your wallet's public key to the room agent (a public entry) so the owner can wrap the room key to you with room_invite. Requires the owner to have agent_approve'd your wallet first. Your public key is derived from your own wallet key locally; an address alone is a hash and cannot be used.",
+    inputSchema: { type: "object", required: ["agent_id"], properties: { agent_id: { type: "string", description: "The room agent id." } } },
+    async run({ agent_id }) {
+      const room = await import(`${HERO_AGENT_PATH}/src/memory/room.mjs`);
+      const pk = await agentKey();
+      const { privateKeyToAccount: toAcct } = await import("viem/accounts");
+      const me = toAcct(pk).address;
+      const mem = await memory(agent_id);
+      const hash = await mem.appendPublic([{ role: "system", text: room.PUBKEY_MARK + JSON.stringify({ addr: me.toLowerCase(), pub: room.pubkeyOf(pk), at: new Date().toISOString() }) }]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      return { text: `Joined: ${me} published its pubkey to agent ${agent_id}. Ask the owner to room_invite ${me}.` };
+    },
+  },
+  room_invite: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "Owner: give a joined member the room key — reads their published pubkey from the room, unwraps your own room key, re-wraps it to them (ECIES), posts the wrap on-chain. After this they room_read/room_write. To EXCLUDE someone later: agent_approve them false AND rotate (room_create again) — old entries they could read stay readable to them; that is how encryption works.",
+    inputSchema: { type: "object", required: ["agent_id", "wallet"], properties: { agent_id: { type: "string" }, wallet: { type: "string", description: "The member's wallet address (they must have room_join'd)." } } },
+    async run({ agent_id, wallet: memberAddr }) {
+      const room = await import(`${HERO_AGENT_PATH}/src/memory/room.mjs`);
+      const pk = await agentKey();
+      const { privateKeyToAccount: toAcct } = await import("viem/accounts");
+      const me = toAcct(pk).address.toLowerCase();
+      const target = String(memberAddr || "").toLowerCase();
+      const mem = await memory(agent_id);
+      const entries = await mem.raw();
+      const pubEntry = entries.filter((e) => e.text?.startsWith(room.PUBKEY_MARK)).map((e) => { try { return JSON.parse(e.text.slice(room.PUBKEY_MARK.length)); } catch { return null; } }).filter(Boolean).reverse().find((x) => x.addr === target);
+      if (!pubEntry) throw new Error(`${memberAddr} has not room_join'd this agent (no pubkey:: entry found).`);
+      const myWrap = entries.filter((e) => e.text?.startsWith(room.ROOMKEY_MARK)).map((e) => { try { return JSON.parse(e.text.slice(room.ROOMKEY_MARK.length)); } catch { return null; } }).filter(Boolean).reverse().find((x) => x.to === me);
+      if (!myWrap) throw new Error("No room key wrap for you — run room_create first.");
+      const roomKey = room.unwrapKey(pk, myWrap);
+      const wrap = room.wrapKey(pubEntry.pub, roomKey);
+      const hash = await mem.appendPublic([{ role: "system", text: room.ROOMKEY_MARK + JSON.stringify({ to: target, ...wrap, at: new Date().toISOString() }) }]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      return { text: `Invited: the room key is now wrapped to ${memberAddr} on-chain. They can room_read and room_write agent ${agent_id}.` };
+    },
+  },
+  room_write: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Write a message into the room, encrypted with the shared room key — readable by members only, sealed bytes to everyone else including non-member wallets. Requires your roomkey:: wrap (room_invite) and contract write access (agent_approve).",
+    inputSchema: { type: "object", required: ["agent_id", "text"], properties: { agent_id: { type: "string" }, text: { type: "string" }, from: { type: "string", description: "Display name. Defaults to your wallet address." } } },
+    async run({ agent_id, text, from }) {
+      if (!String(text || "").trim()) throw new Error("Empty message.");
+      const { mem, me } = await roomMemory(agent_id);
+      const hash = await mem.appendRoom([{ role: "agent", text: "msg::" + JSON.stringify({ from: from || me, text: String(text), at: new Date().toISOString() }) }]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      return { text: `Room message posted to agent ${agent_id} (members-only).` };
+    },
+  },
+  room_read: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "Read the room: unwraps the room key from YOUR on-chain wrap and decrypts the members-only entries. A wallet without a wrap gets nothing — the same bytes read as sealed.",
+    inputSchema: { type: "object", required: ["agent_id"], properties: { agent_id: { type: "string" }, limit: { type: "number", description: "Default 20." } } },
+    async run({ agent_id, limit = 20 }) {
+      const { mem } = await roomMemory(agent_id);
+      const entries = (await mem.raw()).filter((e) => e.room);
+      if (!entries.length) return { text: `No room entries on agent ${agent_id} yet (or you are not a member).` };
+      const rows = entries.slice(-Math.max(1, Math.min(100, limit))).map((e) => {
+        try { const m = JSON.parse(e.text.slice(5)); return `  ${m.from} · ${String(m.at || "").slice(0, 16)}\n    ${m.text.slice(0, 300)}`; }
+        catch { return "  " + e.text.slice(0, 200); }
+      });
+      return { text: `${entries.length} room entr${entries.length === 1 ? "y" : "ies"} on agent ${agent_id}:\n${rows.join("\n")}` };
     },
   },
   agent_approve: {
