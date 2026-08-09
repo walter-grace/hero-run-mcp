@@ -239,6 +239,9 @@ async function runModel(id, input, kind, consent) {
 // Newest first. initialize echoes whichever of these the client asked for.
 const SUPPORTED = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
+// Canvas-authored workflows carry no id (they save {name,nodes,edges}); harness-authored ones do.
+// Derive a stable id from the name so both are addressable the same way.
+const wfId = (wf) => wf.id || "wf-" + String(wf.name || "workflow").replace(/[^a-z0-9]+/gi, "-").slice(0, 32).toLowerCase();
 const TOOLS = {
   list_models: {
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -728,6 +731,91 @@ const TOOLS = {
       if (!md) return { text: `Fetched ${url} but got no extractable text (a paywall, an image-only PDF, or a JS wall).` };
       const cap = Math.min(Math.max(1000, max_chars), 40_000);
       return { text: `# ${d.data?.metadata?.title || url}\n${url}\n\n${md.slice(0, cap)}${md.length > cap ? `\n\n…(${md.length - cap} more chars — raise max_chars or scrape the section you need)` : ""}` };
+    },
+  },
+  workflow_save: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Save a WORKFLOW — a named, ordered plan a subagent can follow and resume. Written on-chain as a workflow:: entry the wallet owns, so any harness (this one, Claude Code, the Studio canvas) can list and read it later. Pass `steps` (a plain ordered list) for a harness-authored plan; the visual canvas saves the same entry with nodes/edges. Costs RH gas.",
+    inputSchema: {
+      type: "object", required: ["name", "steps"],
+      properties: {
+        name: { type: "string" },
+        steps: { type: "array", items: { type: "string" }, description: "Ordered steps of the plan." },
+        agent_id: { type: "string", description: "Defaults to HERO_AGENT_ID." },
+      },
+    },
+    async run({ name, steps, agent_id }) {
+      const nm = String(name || "").trim();
+      const list = (Array.isArray(steps) ? steps : []).map((s) => String(s || "").trim()).filter(Boolean);
+      if (!nm || !list.length) throw new Error("A name and at least one step are required.");
+      const wf = { id: `wf-${nm.replace(/[^a-z0-9]+/gi, "-").slice(0, 32)}`, name: nm, steps: list, savedAt: new Date().toISOString() };
+      const mem = await memory(agent_id);
+      const hash = await mem.append([{ role: "system", text: "workflow::" + JSON.stringify(wf) }]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      return { text: `Workflow "${nm}" (${list.length} steps, id ${wf.id}) saved to agent ${agent_id ?? AGENT_ID}, on-chain.\nAny harness can now workflow_get "${wf.id}" and follow it. Record progress with workflow_progress.` };
+    },
+  },
+  workflow_list: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "List the workflows saved on an agent (authored here or in the Studio canvas), newest first, with how many steps each has and how many are done.",
+    inputSchema: { type: "object", properties: { agent_id: { type: "string", description: "Defaults to HERO_AGENT_ID." } } },
+    async run({ agent_id }) {
+      const entries = await (await memory(agent_id)).raw();
+      const wfs = entries.filter((e) => String(e.text || "").startsWith("workflow::")).map((e) => { try { return JSON.parse(e.text.slice(10)); } catch { return null; } }).filter(Boolean);
+      if (!wfs.length) return { text: `No workflows on agent ${agent_id ?? AGENT_ID}. Save one with workflow_save, or from the Studio canvas.` };
+      const prog = entries.filter((e) => String(e.text || "").startsWith("wfstep::")).map((e) => { try { return JSON.parse(e.text.slice(8)); } catch { return null; } }).filter(Boolean);
+      // De-dupe by id keeping the latest definition; a re-save supersedes.
+      const byId = new Map(); for (const wf of wfs) byId.set(wfId(wf), wf);
+      const rows = [...byId.values()].reverse().map((wf) => {
+        const id = wfId(wf); const done = new Set(prog.filter((p) => p.wf === id && p.status === "done").map((p) => p.step)).size;
+        return `  ${id} — "${wf.name}" · ${wf.steps?.length ?? (wf.nodes?.length || 0)} steps · ${done} done`;
+      });
+      return { text: `${rows.length} workflow(s) on agent ${agent_id ?? AGENT_ID}:\n${rows.join("\n")}` };
+    },
+  },
+  workflow_get: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "Read one workflow by id or name AND the progress recorded against it — so a fresh subagent sees the plan plus exactly what has been done and what is left, and resumes without redoing work. This is how a subagent revisits what it (or another) was doing.",
+    inputSchema: {
+      type: "object", required: ["ref"],
+      properties: { ref: { type: "string", description: "workflow id or name" }, agent_id: { type: "string" } },
+    },
+    async run({ ref, agent_id }) {
+      const entries = await (await memory(agent_id)).raw();
+      const wfs = entries.filter((e) => String(e.text || "").startsWith("workflow::")).map((e) => { try { return JSON.parse(e.text.slice(10)); } catch { return null; } }).filter(Boolean);
+      const wf = [...wfs].reverse().find((x) => wfId(x) === ref || x.name === ref || x.id === ref);
+      if (!wf) throw new Error(`No workflow "${ref}" on agent ${agent_id ?? AGENT_ID}. See workflow_list.`);
+      const prog = entries.filter((e) => String(e.text || "").startsWith("wfstep::")).map((e) => { try { return JSON.parse(e.text.slice(8)); } catch { return null; } }).filter(Boolean).filter((p) => p.wf === wfId(wf));
+      const steps = wf.steps || (wf.nodes || []).map((n) => `${n.type} node`);
+      const lines = steps.map((st, i) => {
+        const done = prog.filter((p) => p.step === i);
+        const last = done[done.length - 1];
+        const mark = last?.status === "done" ? "✓" : last ? "…" : "○";
+        return `  ${mark} ${i + 1}. ${st}${last?.note ? `  — ${last.note}` : ""}`;
+      });
+      return { text: `Workflow "${wf.name}" (${wfId(wf)}), saved ${wf.savedAt || "?"}:\n${lines.join("\n")}\n\n${prog.length ? `${prog.length} progress note(s) recorded.` : "No progress yet — start at step 1 and record with workflow_progress."}` };
+    },
+  },
+  workflow_progress: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Record progress on a workflow step: what you did and whether it's done. Written on-chain (wfstep::) so a later session — you or another subagent — reads it via workflow_get and resumes exactly where this left off. This is how subagents track what they are doing.",
+    inputSchema: {
+      type: "object", required: ["workflow", "step"],
+      properties: {
+        workflow: { type: "string", description: "workflow id" },
+        step: { type: "number", description: "0-based step index" },
+        note: { type: "string", description: "what you did / found" },
+        status: { type: "string", enum: ["doing", "done", "blocked"], description: "default doing" },
+        agent_id: { type: "string" },
+      },
+    },
+    async run({ workflow, step, note, status = "doing", agent_id }) {
+      if (!workflow || !Number.isInteger(step)) throw new Error("workflow id and a 0-based step index are required.");
+      const entry = { wf: String(workflow), step, note: String(note || "").slice(0, 2000), status, at: new Date().toISOString() };
+      const mem = await memory(agent_id);
+      const hash = await mem.append([{ role: "agent", text: "wfstep::" + JSON.stringify(entry) }]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      return { text: `Progress recorded on ${workflow} step ${step + 1} (${status}). Any session can now workflow_get "${workflow}" and see it.` };
     },
   },
   memory_write: {
