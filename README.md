@@ -84,3 +84,4 @@ and no step depends on the machine that started it still being awake.
 ---
 
 Looking for the eight-language ports (Zig/Rust/Go/C++/Swift/Bun/Node/Python) and their cold-start benchmark? See [docs/PORTS.md](docs/PORTS.md).
+\n## Use it from a browser (Studio canvas)\n\n`node http-bridge.mjs` serves the same 22 tools over MCP Streamable HTTP on `127.0.0.1:8618`, with a bearer token printed on boot. Paste the URL + token into the Studio Plugins menu and every Hero node can call them. Binds localhost only; the token is mandatory because any open browser tab can reach 127.0.0.1.\n

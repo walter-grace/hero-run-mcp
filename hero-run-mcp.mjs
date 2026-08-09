@@ -800,7 +800,11 @@ const send = (m) => process.stdout.write(JSON.stringify(m) + "\n");
 const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
 const fail = (id, message, code = -32000) => send({ jsonrpc: "2.0", id, error: { code, message } });
 
-createInterface({ input: process.stdin }).on("line", async (line) => {
+export { TOOLS, SUPPORTED };
+// Start the stdio loop only when run directly. The HTTP bridge imports { TOOLS } from this file,
+// and an import that silently grabbed stdin would be a strange gift to give a caller.
+const IS_MAIN = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop());
+if (IS_MAIN) createInterface({ input: process.stdin }).on("line", async (line) => {
   line = line.trim(); if (!line) return;
   let req; try { req = JSON.parse(line); } catch { return; }
   const { id, method, params } = req;
@@ -844,4 +848,4 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     } else if (id != null) fail(id, `Unknown method: ${method}`, -32601);
   } catch (e) { if (id != null) fail(id, e.message); }
 });
-process.stderr.write(`Hero Run MCP → ${URL} · wallet ${account ? account.address : "read-only"}\n`);
+if (IS_MAIN) process.stderr.write(`Hero Run MCP → ${URL} · wallet ${account ? account.address : "read-only"}\n`);

@@ -40,6 +40,21 @@ above). Recover anywhere with `file_get` (byte-identical, hash-verified; it refu
 Reference: agent #17 carries hangdry's `main.rs` beside its reasoning trace — the mission's code and
 its method live on the same chain.
 
+## Reaching these tools from the Studio canvas (HTTP bridge)
+
+The stdio server is for CLI harnesses (Claude Code, OpenCode) and is unreachable from a browser.
+To use these tools from the Studio graph's Plugins menu, run the HTTP bridge — same 22 tools, same
+implementation, served over MCP Streamable HTTP:
+
+```
+HERO_AGENT_KEY_FILE=/path/to/agent.key  HERO_RUN_KEY=hr_live_...  node http-bridge.mjs
+```
+
+It prints a URL (`http://127.0.0.1:8618/mcp`) and a bearer token. In Studio: Plugins menu → paste
+both → Connect. Now Hero nodes can call `sandbox_run`, `memory_write`, `swarm_spawn`, `file_save`,
+etc. Binds localhost only, requires the token (localhost is not privacy — any open tab can hit
+127.0.0.1, and these tools spend money), and answers CORS + Private Network Access preflight.
+
 ## Delegation
 
 - `swarm_spawn` mints one agent per slice of work with `task::` briefs; the cloud worker executes
