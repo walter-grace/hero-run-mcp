@@ -609,6 +609,76 @@ const TOOLS = {
       return { text: `${ids.length} worker(s), ${pending} still without a result:\n\n${parts.join("\n\n")}` };
     },
   },
+  file_save: {
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Save a FILE (code, config, any artifact) into an agent's on-chain memory, content-addressed by sha256. This is how code produced in a mission survives the machine that wrote it: inline in the encrypted checkpoint log up to 128KB, readable back byte-identical from any machine with the wallet key via file_get. For bigger files pass a uri pointer instead (R2/IPFS/https) and only the hash goes on-chain. Costs RH gas (~$0.005).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Local file path to read and attach (the MCP server runs on this machine)." },
+        content: { type: "string", description: "Alternative to path: the file content as a UTF-8 string." },
+        name: { type: "string", description: "Filename to record. Defaults to the path's basename." },
+        uri: { type: "string", description: "Store a POINTER instead of bytes: the file stays at this uri, only {sha256, uri} goes on-chain. Requires path or content to hash." },
+        agent_id: { type: "string", description: "Agent to attach to. Defaults to HERO_AGENT_ID." },
+      },
+    },
+    async run({ path, content, name, uri, agent_id }) {
+      if (!path && content == null) throw new Error("Give a path or content.");
+      const { readFile } = await import("node:fs/promises");
+      const { basename, extname } = await import("node:path");
+      const buf = path ? await readFile(path) : Buffer.from(String(content), "utf8");
+      const fileName = name || (path ? basename(path) : "file.txt");
+      const MIME = { ".js": "text/javascript", ".mjs": "text/javascript", ".ts": "text/plain", ".rs": "text/plain", ".py": "text/plain", ".json": "application/json", ".md": "text/markdown", ".html": "text/html", ".txt": "text/plain", ".css": "text/css" };
+      let files;
+      try { files = await import(`${HERO_AGENT_PATH}/src/files.mjs`); }
+      catch { throw new Error(`Could not load the file store from ${HERO_AGENT_PATH} — clone hero-agent there or set HERO_AGENT_PATH.`); }
+      const entry = uri
+        ? files.makeFilePointerEntry({ name: fileName, mime: MIME[extname(fileName)] || "application/octet-stream", size: buf.length, sha256: files.sha256hex(buf), uri })
+        : files.makeFileEntry(buf, { name: fileName, mime: MIME[extname(fileName)] || "application/octet-stream" });
+      const mem = await memory(agent_id);
+      const hash = await mem.append([entry]);
+      await rhPub.waitForTransactionReceipt({ hash }).catch(() => {});
+      const sha = JSON.parse(entry.text.slice(6)).sha256;
+      return { text: `File "${fileName}" (${(buf.length / 1024).toFixed(1)}KB, sha256 ${sha.slice(0, 16)}…) saved to agent ${agent_id ?? AGENT_ID}${uri ? ` as a pointer to ${uri}` : " inline, encrypted on-chain"}.\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n\nRecover it anywhere with file_get "${sha.slice(0, 12)}" or by name.` };
+    },
+  },
+  file_list: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "List the files attached to an agent's memory: name, size, sha256, and whether the bytes are inline on-chain or an off-chain pointer.",
+    inputSchema: { type: "object", properties: { agent_id: { type: "string", description: "Defaults to HERO_AGENT_ID." } } },
+    async run({ agent_id }) {
+      let files;
+      try { files = await import(`${HERO_AGENT_PATH}/src/files.mjs`); } catch { throw new Error("file store unavailable — set HERO_AGENT_PATH"); }
+      const found = files.parseFiles(await (await memory(agent_id)).raw());
+      if (!found.size) return { text: `No files on agent ${agent_id ?? AGENT_ID}. Save one with file_save.` };
+      return { text: `${found.size} file(s) on agent ${agent_id ?? AGENT_ID}:\n` + [...found.values()].map((f) => `  ${f.sha256.slice(0, 12)}  ${((f.size / 1024).toFixed(1) + "KB").padEnd(8)} ${(f.uri ? "pointer" : "inline").padEnd(8)} ${f.name}`).join("\n") };
+    },
+  },
+  file_get: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    description: "Recover a file from an agent's memory by sha256 prefix or name. Inline files come back byte-identical (hash-verified); pointer files return their uri. Optionally write to a local path.",
+    inputSchema: {
+      type: "object", required: ["ref"],
+      properties: {
+        ref: { type: "string", description: "sha256 (or prefix) or the filename." },
+        out: { type: "string", description: "Local path to write the recovered bytes to." },
+        agent_id: { type: "string", description: "Defaults to HERO_AGENT_ID." },
+      },
+    },
+    async run({ ref, out, agent_id }) {
+      let files;
+      try { files = await import(`${HERO_AGENT_PATH}/src/files.mjs`); } catch { throw new Error("file store unavailable — set HERO_AGENT_PATH"); }
+      const f = files.extractFile(await (await memory(agent_id)).raw(), ref);
+      if (!f) throw new Error(`No file matching "${ref}" on agent ${agent_id ?? AGENT_ID}. See file_list.`);
+      if (f.uri) return { text: `"${f.name}" is a pointer: bytes live at ${f.uri} (sha256 ${f.sha256.slice(0, 16)}… verifies them).` };
+      const buf = Buffer.from(f.b64, "base64");
+      const okHash = files.sha256hex(buf) === f.sha256;
+      if (!okHash) throw new Error(`Hash mismatch recovering "${f.name}" — refusing to return tampered bytes.`);
+      if (out) { const { writeFile } = await import("node:fs/promises"); await writeFile(out, buf); return { text: `"${f.name}" (${(buf.length / 1024).toFixed(1)}KB) recovered, hash-verified, written to ${out}.` }; }
+      const text = buf.toString("utf8");
+      return { text: `"${f.name}" (${(buf.length / 1024).toFixed(1)}KB, hash-verified):\n\n${text.slice(0, 4000)}${text.length > 4000 ? "\n… (truncated for display; use out to write the full file)" : ""}` };
+    },
+  },
   memory_write: {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: "Mint a memory: encrypt a note and write it as a checkpoint on Robinhood Chain, owned by your agent NFT. This is what makes a coding session durable — anything written here survives the session and is readable by every other harness pointed at the same agent. Costs a little RH gas (~$0.003). Needs AGENT_PRIVATE_KEY and HERO_AGENT_ID.",
