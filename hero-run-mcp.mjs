@@ -686,6 +686,50 @@ const TOOLS = {
       return { text: `"${f.name}" (${(buf.length / 1024).toFixed(1)}KB, hash-verified):\n\n${text.slice(0, 4000)}${text.length > 4000 ? "\n… (truncated for display; use out to write the full file)" : ""}` };
     },
   },
+  web_search: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Search the web and get back ranked results (title, url, snippet). The first step of a research pipeline: search a topic, then web_scrape the hits, then run_text to synthesize, then memory_write/file_save to keep what you learned. Uses YOUR Firecrawl key (fc-…), billed to your Firecrawl account, not $HERO.",
+    inputSchema: {
+      type: "object", required: ["query"],
+      properties: { query: { type: "string" }, limit: { type: "number", description: "Max results, default 10, cap 30." } },
+    },
+    async run({ query, limit = 10 }) {
+      const key = process.env.FIRECRAWL_API_KEY;
+      if (!key) throw new Error("Set FIRECRAWL_API_KEY (fc-… from firecrawl.dev) in this server's environment. Web crawl bills to your Firecrawl account, not $HERO.");
+      const r = await fetch("https://api.firecrawl.dev/v1/search", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ query, limit: Math.min(Math.max(1, limit), 30) }),
+        signal: AbortSignal.timeout(60_000),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Firecrawl search ${r.status}`);
+      const rows = (d.data || d.results || []).map((x) => `- ${x.title || "(untitled)"}\n  ${x.url}\n  ${(x.description || x.snippet || "").slice(0, 160)}`);
+      return { text: rows.length ? `${rows.length} results for "${query}":\n\n${rows.join("\n")}` : `No results for "${query}".` };
+    },
+  },
+  web_scrape: {
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    description: "Fetch one URL as clean markdown — handles HTML pages AND PDFs (Firecrawl extracts PDF text). This is the crawl step: point it at a document from web_search and get readable content back to feed run_text. Uses YOUR Firecrawl key.",
+    inputSchema: {
+      type: "object", required: ["url"],
+      properties: { url: { type: "string" }, max_chars: { type: "number", description: "Truncate the returned text, default 12000." } },
+    },
+    async run({ url, max_chars = 12000 }) {
+      const key = process.env.FIRECRAWL_API_KEY;
+      if (!key) throw new Error("Set FIRECRAWL_API_KEY (fc-… from firecrawl.dev) in this server's environment.");
+      const r = await fetch("https://api.firecrawl.dev/v1/scrape", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ url, formats: ["markdown"] }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Firecrawl scrape ${r.status}`);
+      const md = d.data?.markdown || d.markdown || "";
+      if (!md) return { text: `Fetched ${url} but got no extractable text (a paywall, an image-only PDF, or a JS wall).` };
+      const cap = Math.min(Math.max(1000, max_chars), 40_000);
+      return { text: `# ${d.data?.metadata?.title || url}\n${url}\n\n${md.slice(0, cap)}${md.length > cap ? `\n\n…(${md.length - cap} more chars — raise max_chars or scrape the section you need)` : ""}` };
+    },
+  },
   memory_write: {
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description: "Mint a memory: encrypt a note and write it as a checkpoint on Robinhood Chain, owned by your agent NFT. This is what makes a coding session durable — anything written here survives the session and is readable by every other harness pointed at the same agent. Costs a little RH gas (~$0.003). Needs AGENT_PRIVATE_KEY and HERO_AGENT_ID.",

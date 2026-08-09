@@ -40,6 +40,21 @@ above). Recover anywhere with `file_get` (byte-identical, hash-verified; it refu
 Reference: agent #17 carries hangdry's `main.rs` beside its reasoning trace — the mission's code and
 its method live on the same chain.
 
+## The deep-research pipeline (search → crawl → synthesize → remember)
+
+The whole point of the SDK: a harness can turn the open web into wallet-owned research. One loop,
+all through this server:
+1. `web_search` a topic → ranked results (your Firecrawl key).
+2. `web_scrape` each hit → clean markdown; **handles PDFs** (Firecrawl extracts the text).
+3. `run_text` (or `consult`) to synthesize across the scraped corpus → paid in $HERO.
+4. `file_save` the source documents (content-addressed) and `memory_write` the findings as
+   `finding::` / `reasoning::` entries → encrypted, on-chain, owned by the wallet.
+
+So "search the web, grab 100 PDFs, run them through Firecrawl, back through Hero, produce deep
+research" is this server's tools in a loop. The research is owned and recallable from any machine
+(`memory_read`), and every synthesis step funds open training. Keys are your own: `FIRECRAWL_API_KEY`
+bills your Firecrawl account, `HERO_RUN_KEY` pays inference in $HERO, the wallet key signs the memory.
+
 ## Reaching these tools from the Studio canvas (HTTP bridge)
 
 The stdio server is for CLI harnesses (Claude Code, OpenCode) and is unreachable from a browser.
