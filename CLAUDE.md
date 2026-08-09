@@ -32,6 +32,14 @@ Any future session — this machine or another, any MCP harness — recovers the
 `memory_read` + the wallet key. That is the product: **the agent's work is public, the agent's
 knowledge is owner-readable, and the method survives the session that produced it.**
 
+## Artifacts: save the code, not just the story
+
+When a mission produces code or files, the trace alone is not enough — save the artifact itself with
+`file_save` (content-addressed by sha256, inline in the encrypted log up to 128KB, `uri` pointer
+above). Recover anywhere with `file_get` (byte-identical, hash-verified; it refuses tampered bytes).
+Reference: agent #17 carries hangdry's `main.rs` beside its reasoning trace — the mission's code and
+its method live on the same chain.
+
 ## Delegation
 
 - `swarm_spawn` mints one agent per slice of work with `task::` briefs; the cloud worker executes
