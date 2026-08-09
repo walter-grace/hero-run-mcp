@@ -1,0 +1,21 @@
+[package]
+name = "hero-run-mcp"
+version = "1.0.0"
+edition = "2021"
+description = "Hero Run MCP server (stdio JSON-RPC): run 500+ AI models paying $HERO per call."
+license = "MIT"
+
+[[bin]]
+name = "hero-run-mcp"
+path = "src/main.rs"
+
+[dependencies]
+ureq = { version = "2", features = ["tls", "json"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

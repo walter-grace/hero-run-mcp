@@ -80,3 +80,7 @@ and no step depends on the machine that started it still being awake.
 - **A receipt is not readability.** RH read replicas lag behind inclusion, so "wait for the receipt
   then read" still misses your own write. Confirm by reading back, and say "replica catching up"
   rather than implying the write failed.
+
+---
+
+Looking for the eight-language ports (Zig/Rust/Go/C++/Swift/Bun/Node/Python) and their cold-start benchmark? See [docs/PORTS.md](docs/PORTS.md).

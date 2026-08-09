@@ -1,0 +1,14 @@
+# keep the build context lean and secret-free (exact paths, not globs that
+# could also match source directories)
+**/.env
+**/.env.local
+go/hero-run-mcp
+zig/hero-run-mcp
+swift/hero-run-mcp
+examples/telegram-bot/telegram-bot
+rust/target/
+zig/.zig-cache/
+zig/zig-out/
+**/*.dSYM/
+.git/
+node_modules/

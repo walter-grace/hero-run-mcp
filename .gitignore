@@ -1,3 +1,16 @@
 node_modules/
 *.key
 .env
+.DS_Store
+# build artifacts (users build from source)
+*.log
+.env.local
+cpp/hero-run-mcp
+examples/telegram-bot/telegram-bot
+go/hero-run-mcp
+rust/target/
+swift/*.dSYM/
+swift/hero-run-mcp
+zig/.zig-cache/
+zig/hero-run-mcp
+zig/zig-out/
