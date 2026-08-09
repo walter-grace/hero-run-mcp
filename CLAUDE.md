@@ -99,6 +99,16 @@ Three sharing modes, in order of what's ready:
    `room_create` again to rotate — entries they could already read stay readable to them; that is
    how encryption works, not a bug.
 
+   **Identity is the published pubkey, and it is PER SURFACE.** These tools derive it from the raw
+   wallet key; the herorunai.com/channels UI derives it from a wallet signature (a browser never
+   exposes its key). Same wallet, two different pubkeys — an invite wrapped to one surface reads as
+   "foreign"/sealed on the other. If a member switches surfaces, they room_join again there and the
+   owner re-invites; both wraps can coexist on-chain.
+
+Human-facing siblings of these tools: **herorunai.com/channels** (all four modes as a messaging
+UI) and the **`hero` terminal** in the hero-agent repo (`/channel`, `/send`, `/remember` speak
+this same protocol).
+
 ## Delegation
 
 - `swarm_spawn` mints one agent per slice of work with `task::` briefs; the cloud worker executes

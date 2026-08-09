@@ -1,4 +1,4 @@
-// HTTP bridge: the same 22 tools, reachable from a BROWSER.
+// HTTP bridge: the same 36 tools, reachable from a BROWSER.
 //
 // The stdio server is perfect for Claude Code and OpenCode, and unreachable from a web page by
 // nature — a browser cannot spawn a process. This bridge imports the same TOOLS registry (one
