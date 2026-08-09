@@ -594,7 +594,13 @@ const TOOLS = {
           try { brief = JSON.parse(task.text.slice(6)).brief; } catch { brief = task?.text?.slice(6) || "(no task recorded)"; }
           if (!results.length) pending++;
           parts.push(`#${id} — ${brief}\n` + (results.length
-            ? results.map((r) => "   ✓ " + r.text.slice(9)).join("\n")
+            ? results.map((r) => {
+                // Handoffs come in two shapes: JSON {text, spentHero, failed} (workers that report
+                // cost) and the legacy bare string. Read both, show cost when it is known.
+                const raw = r.text.slice(9);
+                try { const j = JSON.parse(raw); return `   ${j.failed ? "✗" : "✓"} ${j.text}${Number.isFinite(j.spentHero) ? ` (${j.spentHero.toLocaleString()} $HERO)` : ""}`; }
+                catch { return "   ✓ " + raw; }
+              }).join("\n")
             : "   … no handoff:: recorded yet"));
         } catch (e) { parts.push(`#${id} — unreadable (${e.message})`); }
       }
