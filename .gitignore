@@ -14,3 +14,4 @@ swift/hero-run-mcp
 zig/.zig-cache/
 zig/hero-run-mcp
 zig/zig-out/
+*.pem
