@@ -1019,7 +1019,15 @@ const TOOLS = {
       if (!visible) {
         return { text: `Memory written and confirmed on chain (agent ${agent_id ?? AGENT_ID}), but the read replica has not caught up yet.\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n\nThe write is safe — do NOT retry it. It will appear in memory_read shortly.` };
       }
-      return { text: `Memory minted on Robinhood Chain (agent ${agent_id ?? AGENT_ID}).\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n\nEncrypted with your wallet's key before it left this machine — on-chain observers see random bytes.` };
+      // The privacy line has to follow the `public` flag, not be hardcoded. It previously claimed
+      // "Encrypted with your wallet's key — on-chain observers see random bytes" on EVERY write,
+      // including public:true ones that land world-readable. Verified live against agent #80: the
+      // flag was honored, the bytes were plaintext on chain and readable with no wallet, and the
+      // tool still reported them as encrypted. Telling a caller their data is private when it is
+      // published is the one error here that cannot be walked back once the write is on chain.
+      return { text: pub
+        ? `Memory minted on Robinhood Chain (agent ${agent_id ?? AGENT_ID}).\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n\nWritten UNENCRYPTED (marker-0): this is PUBLIC and permanent. Anyone can read it on chain, no wallet required, and it cannot be unpublished.`
+        : `Memory minted on Robinhood Chain (agent ${agent_id ?? AGENT_ID}).\nhttps://robinhoodchain.blockscout.com/tx/${hash}\n\nEncrypted with your wallet's key before it left this machine — on-chain observers see random bytes.` };
     },
   },
   memory_read: {
